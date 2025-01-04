@@ -1,0 +1,67 @@
+/* Custom styles for SpotScrape web interface */
+
+body {
+    min-height: 100vh;
+}
+
+.navbar-brand {
+    font-weight: 600;
+}
+
+.card {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid rgba(0,0,0,0.125);
+}
+
+#messages {
+    font-family: monospace;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+#messages div {
+    margin-bottom: 0.5rem;
+}
+
+#messages .error {
+    color: #dc3545;
+}
+
+#messages .warning {
+    color: #ffc107;
+}
+
+#messages .success {
+    color: #28a745;
+}
+
+/* Button states */
+.btn:disabled {
+    cursor: not-allowed;
+}
+
+/* Form validation styles */
+.form-control:focus {
+    border-color: #80bdff;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+}
+
+.form-control.is-invalid:focus {
+    border-color: #dc3545;
+    box-shadow: 0 0 0 0.2rem rgba(220,53,69,.25);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding: 1rem;
+    }
+    
+    .card {
+        margin-bottom: 1rem;
+    }
+} 
