@@ -30,6 +30,7 @@ from asyncio import Lock as AsyncLock
 import aiohttp
 from cachetools import TTLCache
 import re
+from pathlib import Path
 
 # Suppress specific warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -41,6 +42,78 @@ warnings.filterwarnings("ignore", message=".*Content-Length and Transfer-Encodin
 CACHE_TTL = 3600  # 1 hour cache lifetime
 request_cache = TTLCache(maxsize=100, ttl=CACHE_TTL)
 spotify_cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
+
+def retry_with_backoff(retries=3, backoff_in_seconds=1):
+    """Retry decorator with exponential backoff"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for i in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    if i == retries - 1:  # Last attempt
+                        raise
+                    wait_time = (backoff_in_seconds * 2 ** i) + random.uniform(0, 1)
+                    logger.warning(f"Attempt {i + 1} failed: {str(e)}. Retrying in {wait_time:.2f} seconds...")
+                    await asyncio.sleep(wait_time)
+            return await func(*args, **kwargs)  # Final attempt
+        return wrapper
+    return decorator
+
+# Initialize logger at module level with a NullHandler to prevent "No handlers" warnings
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+def setup_logging():
+    """Set up logging with improved configuration"""
+    log_dir = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 
+        "logfiles"
+    ))
+    os.makedirs(log_dir, exist_ok=True)
+    
+    log_number = get_next_log_number()
+    log_file = os.path.normpath(os.path.join(log_dir, f"spotscraper{log_number}.log"))
+    
+    # Delete the existing log file if it exists
+    if os.path.exists(log_file):
+        os.remove(log_file)
+
+    # Create formatter
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+    )
+    
+    try:
+        # Set up file handler
+        file_handler = RotatingFileHandler(
+            log_file,
+            mode='w',  # Open the file in write mode to overwrite
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(detailed_formatter)
+        
+        # Configure module logger only
+        logger.handlers.clear()
+        logger.addHandler(file_handler)
+        logger.setLevel(logging.DEBUG)
+        
+        print(f"Logging to file: {log_file}")
+        return log_file
+        
+    except Exception as e:
+        print(f"Error setting up logging: {str(e)}")
+        raise
+
+def user_message(msg: str, log_only: bool = False):
+    """Print a message to console and log it"""
+    if not log_only:
+        print(msg)
+    logger.info(msg)  # Log the message without USER: prefix
 
 class ClientManager:
     """Singleton manager for API clients"""
@@ -214,9 +287,9 @@ class PlaylistManager:
             logger.error(f"Error creating playlist '{name}': {e}")
             raise
 
-    @RateLimiter(max_calls=100, time_period=60)
+    @retry_with_backoff(retries=3)
     async def add_tracks(self, playlist_id: str, track_uris: List[str]) -> None:
-        """Add tracks to playlist with batching and rate limiting"""
+        """Add tracks to playlist with retries and improved error handling"""
         if not track_uris:
             return
 
@@ -225,10 +298,16 @@ class PlaylistManager:
             
             for i in range(0, len(track_uris), self.batch_size):
                 batch = track_uris[i:i + self.batch_size]
-                async with self._lock:
-                    spotify.playlist_add_items(playlist_id, batch)
-                await asyncio.sleep(0.1)  # Prevent rate limiting
-                logger.debug(f"Added batch of {len(batch)} tracks to playlist {playlist_id}")
+                try:
+                    async with self._lock:
+                        spotify.playlist_add_items(playlist_id, batch)
+                    await asyncio.sleep(0.1)  # Prevent rate limiting
+                    logger.debug(f"Added batch of {len(batch)} tracks to playlist {playlist_id}")
+                except Exception as e:
+                    logger.error(f"Error adding batch to playlist: {e}")
+                    # Continue with next batch instead of failing completely
+                    continue
+                    
         except Exception as e:
             logger.error(f"Error adding tracks to playlist {playlist_id}: {e}")
             raise
@@ -285,6 +364,33 @@ class SpotifySearchManager:
             except Exception as e:
                 logger.error(f"Error searching for album '{album}' by '{artist}': {e}")
                 return None
+
+    @retry_with_backoff(retries=3)
+    async def search_track(self, query: str) -> Optional[str]:
+        """Search for track with retries and improved error handling"""
+        cache_key = f"track:{query}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        try:
+            spotify = await self._get_spotify()
+            results = spotify.search(q=query, type='track', limit=1)
+            
+            if not results or 'tracks' not in results or 'items' not in results['tracks']:
+                logger.warning(f"Invalid response format for query: {query}")
+                return None
+            
+            if results['tracks']['items']:
+                track_uri = results['tracks']['items'][0]['uri']
+                self._cache[cache_key] = track_uri
+                return track_uri
+            
+            logger.debug(f"No results found for query: {query}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error searching for track '{query}': {e}")
+            raise
 
 class WebContentExtractor:
     """Handles web content extraction with improved efficiency"""
@@ -403,70 +509,6 @@ def get_next_log_number() -> int:
     used_numbers = {i for _, i in log_files}
     return next(i for i in range(10) if i not in used_numbers)
 
-def setup_logging():
-    """Set up logging with improved configuration"""
-    log_dir = os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 
-        "logfiles"
-    ))
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_number = get_next_log_number()
-    log_file = os.path.normpath(os.path.join(log_dir, f"spotscraper{log_number}.log"))
-    
-    # Delete the existing log file if it exists
-    if os.path.exists(log_file):
-        os.remove(log_file)
-
-    # Create formatters
-    detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
-    )
-    simple_formatter = logging.Formatter('%(message)s')
-    
-    try:
-        # Set up file handler
-        file_handler = RotatingFileHandler(
-            log_file,
-            mode='w',  # Open the file in write mode to overwrite
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(detailed_formatter)
-        
-        # Set up console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
-        console_handler.setFormatter(simple_formatter)
-        
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
-        root_logger.handlers.clear()
-        root_logger.addHandler(file_handler)
-        root_logger.addHandler(console_handler)
-        
-        # Get module loggers
-        logger = logging.getLogger(__name__)
-        spotify_logger = logging.getLogger('spotify')
-        
-        print(f"Logging to file: {log_file}")  # Inform user before logger is set up
-        # user_message(f"Logging to file: {log_file}")  # Use this after logger is set up
-        
-        return logger, spotify_logger
-        
-    except Exception as e:
-        print(f"Error setting up logging: {str(e)}")
-        raise
-
-def user_message(msg: str, log_only: bool = False):
-    """Log a user-facing message with improved formatting"""
-    if not log_only:
-        print(msg)
-    logger.info(f"USER: {msg}")
-
 def clean_html_content(content: str) -> str:
     """Clean HTML content to extract only relevant text for music information"""
     try:
@@ -504,69 +546,71 @@ def clean_html_content(content: str) -> str:
         logger.error(f"Error cleaning HTML content: {e}")
         return content
 
-async def process_with_gpt(content: str) -> str:
+async def process_with_gpt(content: str, chunk_size: int = 4000) -> List[Dict]:
     """Process content with GPT with improved content filtering and prompting"""
     try:
-        # Clean the content first
+        # Clean and chunk the content
         cleaned_content = clean_html_content(content)
-        logger.debug(f"Cleaned content sample: {cleaned_content[:500]}")
+        chunks = textwrap.wrap(cleaned_content, chunk_size, break_long_words=False, break_on_hyphens=False)
         
-        openai_client = ClientManager.get_openai()
-        chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
-        all_results = []
-        
-        system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
+        system_prompt = """You are a precise music information extractor. Extract song and album references from the text.
 
         Rules:
-        1. Extract ONLY complete artist-album pairs
+        1. Extract BOTH songs and albums with their artists
         2. Maintain exact original spelling and capitalization
-        3. Include full albums only (no singles or EPs unless explicitly labeled as albums)
+        3. Include both individual songs and full albums
         4. Ignore any non-music content, advertisements, or navigation elements
-        5. Do not include track listings or song names
-        6. Do not include commentary, reviews, or ratings
-        7. If an artist has multiple albums mentioned, list each pair separately
-
-        Format each pair exactly as: 'Artist - Album'
-        One pair per line
-        No additional text or commentary
+        5. Format each song as: {"type": "song", "artist": "Artist Name", "title": "Song Title"}
+        6. Format each album as: {"type": "album", "artist": "Artist Name", "title": "Album Title"}
+        7. If unsure about a reference, skip it
+        8. Return one item per line in the specified JSON format
+        9. Do not include commentary or explanations
 
         Example output:
-        The Beatles - Abbey Road
-        Pink Floyd - The Dark Side of the Moon"""
+        {"type": "song", "artist": "The Beatles", "title": "Hey Jude"}
+        {"type": "album", "artist": "Pink Floyd", "title": "The Dark Side of the Moon"}"""
+
+        all_items = []
+        openai_client = ClientManager.get_openai()
         
-        for i, chunk in enumerate(chunks, 1):
+        for chunk in chunks:
             try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract artist-album pairs from this text. Ignore any non-music content:\n\n{chunk}"}
-                ]
-                
                 response = openai_client.chat.completions.create(
                     model="gpt-4",
-                    messages=messages,
-                    temperature=0.1,
-                    max_tokens=2000
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"Extract song and album references from this text:\n\n{chunk}"}
+                    ],
+                    temperature=0.3,  # Lower temperature for more consistent output
+                    max_tokens=1000
                 )
                 
-                result = response.choices[0].message.content.strip()
-                if result:
-                    # Additional filtering of results
-                    valid_pairs = []
-                    for line in result.split('\n'):
-                        line = line.strip()
-                        if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
-                            valid_pairs.append(line)
-                    all_results.extend(valid_pairs)
+                # Process the response
+                for line in response.choices[0].message.content.split('\n'):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        item = json.loads(line)
+                        if item['type'] in ['song', 'album']:
+                            all_items.append(item)
+                    except json.JSONDecodeError:
+                        continue
                 
             except Exception as e:
-                logger.error(f"Error processing chunk {i}: {e}")
+                logger.warning(f"Error processing chunk with GPT: {e}")
                 continue
         
         # Remove duplicates while preserving order
         seen = set()
-        final_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
+        unique_items = []
+        for item in all_items:
+            key = f"{item['type']}:{item['artist']}:{item['title']}"
+            if key not in seen:
+                seen.add(key)
+                unique_items.append(item)
         
-        return '\n'.join(final_results)
+        return unique_items
         
     except Exception as e:
         logger.error(f"Error in GPT processing: {e}")
@@ -689,134 +733,377 @@ class PlaywrightCrawler:
                 logger.error(f"Error processing URL {url}: {e}")
                 raise
 
-async def scan_webpage(url: str, destination_file: str):
-    """Scan webpage and process content"""
-    async with ContentProcessor() as processor:
-        await processor.process_url(url, destination_file)
+def retry_with_backoff(retries=3, backoff_in_seconds=1):
+    """Retry decorator with exponential backoff"""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for i in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    if i == retries - 1:  # Last attempt
+                        raise
+                    wait_time = (backoff_in_seconds * 2 ** i) + random.uniform(0, 1)
+                    logger.warning(f"Attempt {i + 1} failed: {str(e)}. Retrying in {wait_time:.2f} seconds...")
+                    await asyncio.sleep(wait_time)
+            return await func(*args, **kwargs)  # Final attempt
+        return wrapper
+    return decorator
 
-async def create_playlist(json_file: str, playlist_name: str = None):
-    """Create a Spotify playlist from JSON file"""
-    if not playlist_name:
-        playlist_name = f"SpotScraper Playlist {datetime.now().strftime('%Y-%m-%d')}"
+class ResourceManager:
+    """Manages shared resources and cleanup"""
+    def __init__(self):
+        self._resources = set()
+        self._lock = AsyncLock()
 
-    playlist_manager = PlaylistManager()
-    file_handler = FileHandler(json_file)
-    
-    try:
-        data = await file_handler.load()
-        if not data:
-            user_message("No data found in JSON file")
-            return
+    async def register(self, resource):
+        """Register a resource for cleanup"""
+        async with self._lock:
+            self._resources.add(resource)
 
-        playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
+    async def cleanup(self):
+        """Clean up all registered resources"""
+        async with self._lock:
+            for resource in self._resources:
+                try:
+                    if hasattr(resource, 'cleanup'):
+                        await resource.cleanup()
+                    elif hasattr(resource, 'close'):
+                        await resource.close()
+                except Exception as e:
+                    logger.error(f"Error cleaning up resource {resource}: {e}")
+            self._resources.clear()
 
-        playlist_id = await playlist_manager.create_playlist(
-            name=playlist_name,
-            description=playlist_description or f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
+class SpotScraper:
+    """Main class for handling webpage scanning and playlist creation"""
+    def __init__(self, logger=None):
+        # Initialize logger
+        self.logger = logger or logging.getLogger(__name__)
+        self.playlist_manager = PlaylistManager()
+        self.search_manager = SpotifySearchManager()
+        self.file_handler = None
+        self._browser = None
+        self._playwright = None
+        self._browser_lock = AsyncLock()
+        self._resource_manager = ResourceManager()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.cleanup()
+
+    async def cleanup(self):
+        """Clean up all resources"""
+        await self._resource_manager.cleanup()
+        await self._cleanup_browser()
+
+    async def _cleanup_browser(self):
+        """Clean up browser resources"""
+        async with self._browser_lock:
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+
+    async def _get_browser(self):
+        """Get or create browser instance with resource management"""
+        async with self._browser_lock:
+            if not self._browser:
+                self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=[
+                        '--disable-gpu',
+                        '--no-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-setuid-sandbox'
+                    ]
+                )
+                await self._resource_manager.register(self._browser)
+            return self._browser
+
+    @retry_with_backoff(retries=3)
+    async def _get_page_content(self, url: str) -> str:
+        """Get page content with shared browser instance and retries"""
+        browser = await self._get_browser()
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
-
-        track_uris = []
-        spotify = await ClientManager.get_spotify()
         
-        for entry in data:
-            if spotify_link := entry.get('Spotify Link'):
-                if 'spotify:album:' in spotify_link:
-                    album_id = spotify_link.split(':')[-1]
-                    album_tracks = spotify.album_tracks(album_id)
-                    track_uris.extend(track['uri'] for track in album_tracks['items'])
+        try:
+            page = await context.new_page()
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            
+            if not response:
+                raise Exception("Failed to get response from page")
+            
+            if response.status >= 400:
+                raise Exception(f"HTTP error {response.status}: {response.status_text}")
+            
+            content = await page.content()
+            
+            if not content.strip():
+                raise Exception("Received empty page content")
+            
+            return content
+        except Exception as e:
+            logger.error(f"Error fetching page content: {str(e)}")
+            raise
+        finally:
+            await context.close()
 
-        track_uris = list(set(track_uris))
-
-        if track_uris:
-            await playlist_manager.add_tracks(playlist_id, track_uris)
-            user_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
+    def _get_default_data_path(self, scan_type: str) -> str:
+        """Get the default path for saving scan results"""
+        # Create SpotScrape_data directory in script directory
+        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'SpotScrape_data')
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # Use standardized filenames based on scan type
+        if scan_type == 'url':
+            filename = 'musicdata_url.json'
+        elif scan_type == 'gpt':
+            filename = 'musicdata_gpt.json'
         else:
-            user_message("No tracks found to add to playlist")
+            raise ValueError(f"Invalid scan type: {scan_type}")
+            
+        return os.path.join(data_dir, filename)
 
-    except Exception as e:
-        logger.error(f"Error creating playlist: {e}")
-        raise
-
-async def scan_spotify_links(url: str, destination_file: str) -> None:
-    """Scan webpage for Spotify links and add artist and album data to JSON"""
-    extractor = WebContentExtractor()
-    try:
-        # Initialize file handler
-        file_handler = FileHandler(destination_file)
-
-        # Extract content
-        content = await extractor.extract_content(url)
-        
-        # Log a sample of the content for debugging
-        content_sample = content[:1000]
-        logger.debug(f"Content sample: {content_sample}")
-        
-        # Enhanced regex pattern to capture various Spotify album link formats
-        spotify_patterns = [
-            r'spotify:album:([a-zA-Z0-9]{22})',  # URI format
-            r'open\.spotify\.com/album/([a-zA-Z0-9]{22})',  # Web URL format
-            r'spotify\.com/album/([a-zA-Z0-9]{22})',  # Alternative web URL format
-            r'href="[^"]*?/album/([a-zA-Z0-9]{22})',  # href attribute format
-            r'data-uri="spotify:album:([a-zA-Z0-9]{22})',  # data-uri attribute format
-            r'/album/([a-zA-Z0-9]{22})',  # Simple album ID format
-        ]
-        
-        # Collect all unique album IDs
-        album_ids = set()
-        for pattern in spotify_patterns:
-            matches = re.finditer(pattern, content, re.IGNORECASE)
+    async def scan_spotify_links(self, url: str, destination_file: str = None) -> List[Dict]:
+        """Scan webpage for Spotify links and extract metadata"""
+        try:
+            if destination_file is None:
+                destination_file = self._get_default_data_path('url')
+            
+            self.file_handler = FileHandler(destination_file)
+            self.logger.info(f"Scanning {url} for Spotify links...")
+            
+            content = await self._get_page_content(url)
+            soup = BeautifulSoup(content, 'html.parser')
+            spotify_links = []
+            
+            # Expanded pattern to match various Spotify URL formats
+            spotify_patterns = [
+                'spotify.com/track/',
+                'spotify.com/album/',
+                'spotify.com/artist/',
+                'spotify:track:',
+                'spotify:album:',
+                'spotify:artist:'
+            ]
+            
+            # Search in various locations and collect raw links
+            raw_links = set()
+            
+            # Search in href attributes
+            for link in soup.find_all('a'):
+                href = link.get('href', '')
+                if any(pattern in href for pattern in spotify_patterns):
+                    raw_links.add(href)
+            
+            # Search in embedded iframes
+            for iframe in soup.find_all('iframe'):
+                src = iframe.get('src', '')
+                if any(pattern in src for pattern in spotify_patterns):
+                    raw_links.add(src)
+            
+            # Search in data attributes
+            for element in soup.find_all(attrs={'data-spotify-url': True}):
+                spotify_url = element['data-spotify-url']
+                if any(pattern in spotify_url for pattern in spotify_patterns):
+                    raw_links.add(spotify_url)
+            
+            # Search in text content for Spotify URLs
+            text_content = soup.get_text()
+            url_pattern = r'https?://[^\s<>"]+?(?:{})[^\s<>"]*'.format('|'.join(spotify_patterns))
+            matches = re.finditer(url_pattern, text_content, re.IGNORECASE)
             for match in matches:
-                # Extract the album ID from the capturing group
-                album_id = match.group(1)
-                if album_id and len(album_id) == 22:  # Spotify IDs are 22 characters
-                    album_ids.add(album_id)
-                    logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
+                raw_links.add(match.group())
+            
+            # Process each unique link to get metadata
+            spotify = await ClientManager.get_spotify()
+            timestamp = datetime.now().isoformat()
+            
+            for spotify_url in raw_links:
+                try:
+                    # Extract Spotify ID and type from URL
+                    if 'spotify:' in spotify_url:
+                        # Handle Spotify URI format
+                        parts = spotify_url.split(':')
+                        item_type = parts[-2]
+                        item_id = parts[-1]
+                    else:
+                        # Handle HTTP URL format
+                        parts = spotify_url.rstrip('/').split('/')
+                        item_type = parts[-2]
+                        item_id = parts[-1].split('?')[0]
+                    
+                    # Get metadata based on type
+                    if item_type == 'track':
+                        track = spotify.track(item_id)
+                        spotify_links.append({
+                            'artist': track['artists'][0]['name'],
+                            'album': track['album']['name'],
+                            'spotify_url': spotify_url,
+                            'source_url': url,
+                            'timestamp': timestamp
+                        })
+                    elif item_type == 'album':
+                        album = spotify.album(item_id)
+                        spotify_links.append({
+                            'artist': album['artists'][0]['name'],
+                            'album': album['name'],
+                            'spotify_url': spotify_url,
+                            'source_url': url,
+                            'timestamp': timestamp
+                        })
+                    # Skip artist links as they don't have album info
+                    
+                except Exception as e:
+                    self.logger.warning(f"Error processing Spotify URL {spotify_url}: {e}")
+                    continue
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_links = []
+            for link in spotify_links:
+                key = f"{link['artist']} - {link['album']} - {link['spotify_url']}"
+                if key not in seen:
+                    seen.add(key)
+                    unique_links.append(link)
+            
+            await self.file_handler.save(unique_links)
+            self.logger.info(f"Found {len(unique_links)} unique Spotify links")
+            return unique_links
+            
+        except Exception as e:
+            self.logger.error(f"Error scanning URL {url}: {e}")
+            raise
 
-        user_message(f"Found {len(album_ids)} unique Spotify album links")
-        if not album_ids:
-            logger.warning("No Spotify album links found in the content")
-            return
+    async def scan_webpage(self, url: str, destination_file: str = None) -> List[Dict]:
+        """Scan webpage using GPT for music content"""
+        try:
+            if destination_file is None:
+                destination_file = self._get_default_data_path('gpt')
+            
+            self.file_handler = FileHandler(destination_file)
+            self.logger.info(f"Scanning {url} using GPT...")
+            
+            content = await self._get_page_content(url)
+            extracted_items = await process_with_gpt(content)
+            timestamp = datetime.now().isoformat()
+            
+            # Get Spotify client for searching
+            spotify = await ClientManager.get_spotify()
+            formatted_items = []
+            
+            for item in extracted_items:
+                try:
+                    # Search based on item type
+                    if item['type'] == 'song':
+                        query = f"artist:{item['artist']} track:{item['title']}"
+                        results = spotify.search(q=query, type='track', limit=1)
+                        
+                        if results and results['tracks']['items']:
+                            track = results['tracks']['items'][0]
+                            formatted_items.append({
+                                'artist': track['artists'][0]['name'],
+                                'album': track['album']['name'],
+                                'spotify_url': track['external_urls']['spotify'],
+                                'source_url': url,
+                                'timestamp': timestamp
+                            })
+                    elif item['type'] == 'album':
+                        query = f"artist:{item['artist']} album:{item['title']}"
+                        results = spotify.search(q=query, type='album', limit=1)
+                        
+                        if results and results['albums']['items']:
+                            album = results['albums']['items'][0]
+                            formatted_items.append({
+                                'artist': album['artists'][0]['name'],
+                                'album': album['name'],
+                                'spotify_url': album['external_urls']['spotify'],
+                                'source_url': url,
+                                'timestamp': timestamp
+                            })
+                except Exception as e:
+                    self.logger.warning(f"Error processing item {item}: {e}")
+                    continue
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_items = []
+            for item in formatted_items:
+                key = f"{item['artist']} - {item['album']} - {item['spotify_url']}"
+                if key not in seen:
+                    seen.add(key)
+                    unique_items.append(item)
+            
+            await self.file_handler.save(unique_items)
+            self.logger.info(f"Found {len(unique_items)} unique items with Spotify links")
+            return unique_items
+            
+        except Exception as e:
+            self.logger.error(f"Error scanning URL {url}: {e}")
+            raise
 
-        new_entries = []
-        spotify = await ClientManager.get_spotify()
-
-        # Process each album ID
-        for album_id in album_ids:
-            try:
-                album_info = spotify.album(album_id)
-                artist = album_info['artists'][0]['name']
-                album = album_info['name']
-
-                new_entry = {
-                    "Artist": artist,
-                    "Album": album,
-                    "Spotify Link": f"spotify:album:{album_id}",
-                    "Extraction Date": datetime.now().isoformat()
-                }
-
-                new_entries.append(new_entry)
-                user_message(f"Found: {artist} - {album}")
-
-            except Exception as e:
-                logger.warning(f"Error processing album ID {album_id}: {e}")
-                continue
-
-        # Save results, overwriting any existing data
-        if new_entries:
-            await file_handler.save(new_entries)  # Save only new entries, overwriting existing file
-            user_message(f"Saved {len(new_entries)} entries to {destination_file}")
-        else:
-            user_message("No entries found to save")
-
-    except Exception as e:
-        logger.error(f"Error scanning Spotify links from {url}: {e}")
-        raise
-    finally:
-        # Ensure Playwright resources are cleaned up
-        await extractor.cleanup()
+    async def create_playlist(self, tracks: List[Dict], name: str = None) -> str:
+        """Create a Spotify playlist from the extracted tracks"""
+        try:
+            if not name:
+                name = f"SpotScrape Playlist {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            
+            self.logger.info(f"Creating playlist: {name}")
+            playlist_id = await self.playlist_manager.create_playlist(name)
+            
+            # Process tracks in batches
+            batch_size = 50
+            track_uris = []
+            
+            # Group tracks by type for batch processing
+            direct_tracks = []
+            search_tracks = []
+            
+            for track in tracks:
+                if 'url' in track:  # Direct Spotify URL
+                    track_id = track['url'].split('/')[-1].split('?')[0]
+                    direct_tracks.append(f"spotify:track:{track_id}")
+                elif 'song' in track:  # GPT extracted song
+                    search_tracks.append(track['song'])
+            
+            # Add direct tracks
+            if direct_tracks:
+                track_uris.extend(direct_tracks)
+            
+            # Process search tracks in batches
+            for i in range(0, len(search_tracks), batch_size):
+                batch = search_tracks[i:i + batch_size]
+                tasks = [self.search_manager.search_track(song) for song in batch]
+                results = await asyncio.gather(*tasks)
+                track_uris.extend([uri for uri in results if uri])
+                
+                # Add progress update
+                self.logger.info(f"Processed {min(i + batch_size, len(search_tracks))}/{len(search_tracks)} songs...")
+            
+            if track_uris:
+                # Add tracks to playlist in batches
+                for i in range(0, len(track_uris), batch_size):
+                    batch = track_uris[i:i + batch_size]
+                    await self.playlist_manager.add_tracks(playlist_id, batch)
+                    self.logger.info(f"Added {min(i + batch_size, len(track_uris))}/{len(track_uris)} tracks to playlist")
+            
+            return playlist_id
+        except Exception as e:
+            self.logger.error(f"Error creating playlist: {e}")
+            raise
 
 async def main():
-    """Main application entry point with improved error handling and user interaction"""
+    """Main application entry point with improved resource management"""
+    scraper = None
     try:
         # Validate environment variables
         required_env_vars = [
@@ -831,115 +1118,72 @@ async def main():
             user_message(f"Missing required environment variables: {', '.join(missing_vars)}")
             return
 
-        while True:
-            user_message("\nSpotScraper Menu:")
-            user_message("1. Scan webpage for Spotify links")
-            user_message("2. Scan webpage for music content")
-            user_message("3. Create Spotify playlist from JSON")
-            user_message("4. Exit")
-            
-            choice = input("\nEnter your choice (1-4): ").strip()
-            
-            if choice == "1":
-                url = input("\nEnter URL to scan for Spotify links: ").strip()
-                if not url:
-                    user_message("No URL provided")
-                    continue
+        # Initialize SpotScraper with context management
+        async with SpotScraper() as scraper:
+            while True:
+                user_message("\nSpotScraper Menu:")
+                user_message("1. Scan webpage for Spotify links")
+                user_message("2. Scan webpage for music content")
+                user_message("3. Create Spotify playlist from JSON")
+                user_message("4. Exit")
+                
+                choice = input("\nEnter your choice (1-4): ").strip()
+                
+                if choice == "1":
+                    url = input("\nEnter URL to scan for Spotify links: ").strip()
+                    if not url:
+                        user_message("No URL provided")
+                        continue
+                    
+                    destination_file = scraper._get_default_data_path('url')
+                    user_message(f"\nScanning {url} for Spotify links...")
+                    await scraper.scan_spotify_links(url, destination_file)
+                    user_message(f"Scan complete! Results saved to {destination_file}")
 
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
-                
-                user_message("\nWhere would you like to save the results?")
-                user_message(f"1. Default location ({default_path})")
-                user_message("2. Custom location")
-                
-                file_choice = input("Choose (1-2): ").strip()
-                
-                if file_choice == "2":
-                    destination_file = input("Enter full path for JSON file: ").strip()
-                    destination_file = os.path.normpath(os.path.expanduser(destination_file))
+                elif choice == "2":
+                    url = input("\nEnter URL to scan: ").strip()
+                    if not url:
+                        user_message("No URL provided")
+                        continue
+                    
+                    destination_file = scraper._get_default_data_path('gpt')
+                    user_message(f"\nScanning {url}...")
+                    await scraper.scan_webpage(url, destination_file)
+                    user_message(f"Scan complete! Results saved to {destination_file}")
+
+                elif choice == "3":
+                    user_message("\nSelect the JSON file to use:")
+                    user_message("1. URL scan results (musicdata_url.json)")
+                    user_message("2. GPT scan results (musicdata_gpt.json)")
+                    
+                    file_choice = input("Choose (1-2): ").strip()
+                    
+                    if file_choice == "1":
+                        json_file = scraper._get_default_data_path('url')
+                    elif file_choice == "2":
+                        json_file = scraper._get_default_data_path('gpt')
+                    else:
+                        user_message("Invalid choice")
+                        continue
+
+                    if not os.path.exists(json_file):
+                        user_message(f"File not found: {json_file}")
+                        continue
+
+                    # Load JSON file
+                    with open(json_file) as f:
+                        tracks = json.load(f)
+
+                    playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
+                    await scraper.create_playlist(tracks, playlist_name)
+                    user_message("Playlist created successfully!")
+
+                elif choice == "4":
+                    user_message("\nGoodbye!")
+                    break
+
                 else:
-                    destination_file = default_path
-                
-                # Ensure directory exists
-                os.makedirs(os.path.dirname(destination_file), exist_ok=True)
-                
-                user_message(f"\nScanning {url} for Spotify links...")
-                await scan_spotify_links(url, destination_file)
-                user_message("Scan complete!")
-
-            elif choice == "2":
-                url = input("\nEnter URL to scan: ").strip()
-                if not url:
-                    user_message("No URL provided")
-                    continue
-
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
-                
-                user_message("\nWhere would you like to save the results?")
-                user_message(f"1. Default location ({default_path})")
-                user_message("2. Custom location")
-                
-                file_choice = input("Choose (1-2): ").strip()
-                
-                if file_choice == "2":
-                    destination_file = input("Enter full path for JSON file: ").strip()
-                    destination_file = os.path.normpath(os.path.expanduser(destination_file))
-                else:
-                    destination_file = default_path
-                
-                # Ensure directory exists
-                os.makedirs(os.path.dirname(destination_file), exist_ok=True)
-                
-                user_message(f"\nScanning {url}...")
-                await scan_webpage(url, destination_file)
-                user_message("Scan complete!")
-
-            elif choice == "3":
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
-                
-                user_message("\nEnter the path to your JSON file:")
-                user_message(f"1. Default location ({default_path})")
-                user_message("2. Custom location")
-                
-                file_choice = input("Choose (1-2): ").strip()
-                
-                if file_choice == "2":
-                    json_file = input("Enter full path to JSON file: ").strip()
-                    json_file = os.path.normpath(os.path.expanduser(json_file))
-                else:
-                    json_file = default_path
-
-                if not os.path.exists(json_file):
-                    user_message(f"File not found: {json_file}")
-                    continue
-
-                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-                await create_playlist(json_file, playlist_name)
-
-            elif choice == "4":
-                user_message("\nGoodbye!")
-                break
-
-            else:
-                user_message("Invalid choice. Please enter 1-4.")
+                    user_message("Invalid choice. Please enter 1-4.")
 
     except KeyboardInterrupt:
         user_message("\nOperation cancelled by user")
@@ -947,6 +1191,8 @@ async def main():
         logger.error(f"Unexpected error: {e}")
         user_message("An unexpected error occurred. Check the logs for details.")
     finally:
+        if scraper:
+            await scraper.cleanup()
         try:
             await ClientManager.cleanup()
         except Exception as e:
@@ -955,24 +1201,12 @@ async def main():
 if __name__ == "__main__":
     try:
         # Set up logging first
-        logger, spotify_logger = setup_logging()
+        log_file = setup_logging()
+        user_message(f"Logging to file: {log_file}")
         
         # Load environment variables
         load_dotenv()
         
-        # Validate environment variables
-        required_vars = [
-            "SPOTIPY_CLIENT_ID",
-            "SPOTIPY_CLIENT_SECRET",
-            "SPOTIPY_REDIRECT_URI",
-            "OPENAI_API_KEY"
-        ]
-        
-        missing_vars = [var for var in required_vars if not os.getenv(var)]
-        if missing_vars:
-            logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
-            sys.exit(1)
-            
         # Run the application
         asyncio.run(main())
         
@@ -980,7 +1214,6 @@ if __name__ == "__main__":
         logger.info("Application stopped by user")
     except Exception as e:
         logger.error(f"Fatal error: {e}")
-        print(f"\nFatal error: {e}")
         sys.exit(1)
     finally:
         # Ensure all resources are cleaned up
