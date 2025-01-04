@@ -2,6 +2,8 @@
 
 body {
     min-height: 100vh;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
 }
 
 .navbar-brand {
@@ -25,23 +27,64 @@ body {
 
 #messages div {
     margin-bottom: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
 }
 
 #messages .error {
     color: #dc3545;
+    background-color: #f8d7da;
 }
 
 #messages .warning {
-    color: #ffc107;
+    color: #856404;
+    background-color: #fff3cd;
 }
 
 #messages .success {
     color: #28a745;
+    background-color: #d4edda;
+}
+
+#messages .info {
+    color: #0c5460;
+    background-color: #d1ecf1;
+}
+
+#consoleOutput {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    background-color: #f8f9fa;
+}
+
+#consoleOutput div {
+    padding: 2px 4px;
+    border-bottom: 1px solid #eee;
+}
+
+#consoleOutput div:last-child {
+    border-bottom: none;
+}
+
+.custom-save-options {
+    margin-top: 1rem;
+}
+
+.custom-save-options .input-group {
+    max-width: 100%;
+}
+
+#customJsonPath {
+    background-color: #f8f9fa;
+    cursor: not-allowed;
 }
 
 /* Button states */
 .btn:disabled {
     cursor: not-allowed;
+    opacity: 0.65;
 }
 
 /* Form validation styles */
@@ -55,6 +98,67 @@ body {
     box-shadow: 0 0 0 0.2rem rgba(220,53,69,.25);
 }
 
+/* Review Dialog */
+.review-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.review-content {
+    background-color: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    max-width: 600px;
+    width: 90%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.review-content h4 {
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.items-list {
+    overflow-y: auto;
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+}
+
+.item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.item:last-child {
+    border-bottom: none;
+}
+
+.item input[type="checkbox"] {
+    margin-right: 1rem;
+}
+
+.review-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #dee2e6;
+}
+
 /* Responsive adjustments */
 @media (max-width: 768px) {
     .container {
@@ -63,5 +167,182 @@ body {
     
     .card {
         margin-bottom: 1rem;
+    }
+    
+    .review-content {
+        width: 95%;
+        padding: 1rem;
+    }
+    
+    .review-actions {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .review-actions button {
+        width: 100%;
+    }
+    
+    .custom-save-options .input-group {
+        flex-direction: column;
+    }
+    
+    .custom-save-options .input-group > * {
+        width: 100%;
+        margin-bottom: 0.5rem;
+    }
+    
+    .custom-save-options .input-group > *:last-child {
+        margin-bottom: 0;
+    }
+} 
+
+.review-dialog .items-list {
+    max-height: 400px;
+    overflow-y: auto;
+    margin: 1rem 0;
+    padding: 0.5rem;
+    border: 1px solid #dee2e6;
+    border-radius: 0.25rem;
+}
+
+.review-dialog .item {
+    padding: 0.75rem;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background-color 0.2s;
+}
+
+.review-dialog .item:hover {
+    background-color: #f8f9fa;
+}
+
+.review-dialog .item:last-child {
+    border-bottom: none;
+}
+
+.review-dialog .item-details {
+    margin-right: 1rem;
+}
+
+.review-dialog .remove-item {
+    padding: 0.25rem 0.5rem;
+    line-height: 1;
+    font-size: 1.25rem;
+}
+
+.review-dialog .review-controls {
+    position: sticky;
+    top: 0;
+    background-color: white;
+    padding: 0.5rem 0;
+    z-index: 1;
+}
+
+.review-dialog .review-summary {
+    position: sticky;
+    bottom: 0;
+    background-color: white;
+    padding: 0.5rem 0;
+    z-index: 1;
+}
+
+.review-dialog .alert {
+    margin-bottom: 0;
+}
+
+.review-dialog .form-check-input {
+    cursor: pointer;
+}
+
+.review-dialog .btn-group {
+    gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+    .review-dialog .review-content {
+        width: 95%;
+        max-height: 90vh;
+    }
+    
+    .review-dialog .items-list {
+        max-height: 50vh;
+    }
+    
+    .review-dialog .btn-group {
+        flex-wrap: wrap;
+    }
+    
+    .review-dialog .btn-group .btn {
+        flex: 1;
+        white-space: nowrap;
+    }
+} 
+
+#consoleOutput .review-options {
+    margin: 10px 0;
+    padding: 10px;
+    background-color: #e9ecef;
+    border-radius: 4px;
+    border-left: 4px solid #007bff;
+}
+
+#consoleOutput .review-option {
+    padding: 5px 10px;
+    margin: 5px 0;
+    background-color: #fff;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+#consoleOutput .review-option:hover {
+    background-color: #f8f9fa;
+}
+
+#consoleOutput .found-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 10px;
+    margin: 2px 0;
+    background-color: #fff;
+    border-radius: 3px;
+}
+
+#consoleOutput .review-section {
+    margin: 15px 0;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid #28a745;
+}
+
+#consoleOutput .review-header {
+    font-weight: bold;
+    color: #495057;
+    margin-bottom: 10px;
+}
+
+#consoleOutput .review-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+#consoleOutput .found-item {
+    padding: 8px 12px;
+    margin: 4px 0;
+    background-color: #fff;
+    border-radius: 4px;
+    border-left: 3px solid #17a2b8;
+}
+
+@media (max-width: 576px) {
+    #consoleOutput .review-actions {
+        flex-direction: column;
+    }
+    
+    #consoleOutput .review-actions button {
+        width: 100%;
     }
 } 
