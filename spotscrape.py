@@ -873,6 +873,74 @@ class SpotScraper:
             
         return os.path.join(data_dir, filename)
 
+    async def review_and_filter_items(self, items: List[Dict]) -> List[Dict]:
+        """Allow user to review and filter items before saving"""
+        if not items:
+            user_message("No items found to review.")
+            return []
+
+        user_message("\nFound the following entries:")
+        for idx, item in enumerate(items, 1):
+            user_message(f"{idx}. Artist: {item['artist']} | Album: {item['album']}")
+
+        while True:
+            user_message("\nOptions:")
+            user_message("1. Save all entries")
+            user_message("2. Remove specific entries")
+            user_message("3. Remove all entries")
+            
+            choice = input("\nEnter your choice (1-3): ").strip()
+            
+            if choice == "1":
+                return items
+            elif choice == "2":
+                while True:
+                    to_remove = input("\nEnter entry numbers to remove (comma-separated) or 'done' to finish: ").strip().lower()
+                    if to_remove == 'done':
+                        break
+                    
+                    try:
+                        # Convert input to list of indices
+                        indices = [int(x.strip()) for x in to_remove.split(',')]
+                        # Validate indices
+                        if any(idx < 1 or idx > len(items) for idx in indices):
+                            user_message("Invalid entry number(s). Please try again.")
+                            continue
+                        
+                        # Remove items in reverse order to maintain correct indices
+                        for idx in sorted(indices, reverse=True):
+                            removed = items.pop(idx - 1)
+                            user_message(f"Removed: {removed['artist']} - {removed['album']}")
+                        
+                        # Show remaining entries
+                        user_message("\nRemaining entries:")
+                        for idx, item in enumerate(items, 1):
+                            user_message(f"{idx}. Artist: {item['artist']} | Album: {item['album']}")
+                        
+                    except ValueError:
+                        user_message("Invalid input. Please enter numbers separated by commas.")
+                        continue
+                return items
+            elif choice == "3":
+                confirm = input("Are you sure you want to remove all entries? (y/n): ").strip().lower()
+                if confirm == 'y':
+                    return []
+            else:
+                user_message("Invalid choice. Please enter 1-3.")
+
+    async def prompt_create_playlist(self, items: List[Dict]) -> None:
+        """Prompt user to create a playlist from confirmed items"""
+        if not items:
+            return
+            
+        user_message("\nWould you like to create a playlist from these entries? (y/n): ")
+        choice = input().strip().lower()
+        
+        if choice == 'y':
+            playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
+            await self.create_playlist(items, playlist_name)
+            user_message("Playlist created successfully!")
+
     async def scan_spotify_links(self, url: str, destination_file: str = None) -> List[Dict]:
         """Scan webpage for Spotify links and extract metadata"""
         try:
@@ -976,9 +1044,19 @@ class SpotScraper:
                     seen.add(key)
                     unique_links.append(link)
             
-            await self.file_handler.save(unique_links)
-            self.logger.info(f"Found {len(unique_links)} unique Spotify links")
-            return unique_links
+            # Add review step before saving
+            user_message("\nReview found items before saving:")
+            filtered_items = await self.review_and_filter_items(unique_links)
+            
+            if filtered_items:
+                await self.file_handler.save(filtered_items)
+                self.logger.info(f"Saved {len(filtered_items)} items to {destination_file}")
+                # Prompt to create playlist after saving
+                await self.prompt_create_playlist(filtered_items)
+            else:
+                self.logger.info("No items were saved (all filtered out)")
+            
+            return filtered_items
             
         except Exception as e:
             self.logger.error(f"Error scanning URL {url}: {e}")
@@ -1043,9 +1121,19 @@ class SpotScraper:
                     seen.add(key)
                     unique_items.append(item)
             
-            await self.file_handler.save(unique_items)
-            self.logger.info(f"Found {len(unique_items)} unique items with Spotify links")
-            return unique_items
+            # Add review step before saving
+            user_message("\nReview found items before saving:")
+            filtered_items = await self.review_and_filter_items(unique_items)
+            
+            if filtered_items:
+                await self.file_handler.save(filtered_items)
+                self.logger.info(f"Saved {len(filtered_items)} items to {destination_file}")
+                # Prompt to create playlist after saving
+                await self.prompt_create_playlist(filtered_items)
+            else:
+                self.logger.info("No items were saved (all filtered out)")
+            
+            return filtered_items
             
         except Exception as e:
             self.logger.error(f"Error scanning URL {url}: {e}")
@@ -1064,30 +1152,31 @@ class SpotScraper:
             batch_size = 50
             track_uris = []
             
-            # Group tracks by type for batch processing
-            direct_tracks = []
-            search_tracks = []
-            
             for track in tracks:
-                if 'url' in track:  # Direct Spotify URL
-                    track_id = track['url'].split('/')[-1].split('?')[0]
-                    direct_tracks.append(f"spotify:track:{track_id}")
-                elif 'song' in track:  # GPT extracted song
-                    search_tracks.append(track['song'])
-            
-            # Add direct tracks
-            if direct_tracks:
-                track_uris.extend(direct_tracks)
-            
-            # Process search tracks in batches
-            for i in range(0, len(search_tracks), batch_size):
-                batch = search_tracks[i:i + batch_size]
-                tasks = [self.search_manager.search_track(song) for song in batch]
-                results = await asyncio.gather(*tasks)
-                track_uris.extend([uri for uri in results if uri])
-                
-                # Add progress update
-                self.logger.info(f"Processed {min(i + batch_size, len(search_tracks))}/{len(search_tracks)} songs...")
+                try:
+                    spotify_url = track.get('spotify_url')
+                    if not spotify_url:
+                        continue
+                        
+                    # Extract the ID and type from the Spotify URL
+                    parts = spotify_url.rstrip('/').split('/')
+                    item_type = parts[-2]  # 'album' or 'track'
+                    item_id = parts[-1].split('?')[0]
+                    
+                    if item_type == 'track':
+                        # If it's already a track, add it directly
+                        track_uris.append(f"spotify:track:{item_id}")
+                    elif item_type == 'album':
+                        # If it's an album, get all its tracks
+                        spotify = await ClientManager.get_spotify()
+                        album_tracks = spotify.album_tracks(item_id)
+                        track_uris.extend([
+                            f"spotify:track:{t['id']}" 
+                            for t in album_tracks['items']
+                        ])
+                except Exception as e:
+                    self.logger.warning(f"Error processing track {track.get('artist')} - {track.get('album')}: {e}")
+                    continue
             
             if track_uris:
                 # Add tracks to playlist in batches
@@ -1095,6 +1184,8 @@ class SpotScraper:
                     batch = track_uris[i:i + batch_size]
                     await self.playlist_manager.add_tracks(playlist_id, batch)
                     self.logger.info(f"Added {min(i + batch_size, len(track_uris))}/{len(track_uris)} tracks to playlist")
+            else:
+                self.logger.warning("No valid tracks found to add to playlist")
             
             return playlist_id
         except Exception as e:
