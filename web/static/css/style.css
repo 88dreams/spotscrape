@@ -168,7 +168,7 @@ body {
     .card {
         margin-bottom: 1rem;
     }
-    
+
     .review-content {
         width: 95%;
         padding: 1rem;
@@ -263,7 +263,7 @@ body {
         width: 95%;
         max-height: 90vh;
     }
-    
+
     .review-dialog .items-list {
         max-height: 50vh;
     }
@@ -341,7 +341,7 @@ body {
     #consoleOutput .review-actions {
         flex-direction: column;
     }
-    
+
     #consoleOutput .review-actions button {
         width: 100%;
     }

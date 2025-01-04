@@ -11,264 +11,295 @@ import asyncio
 from functools import wraps
 import logging
 import traceback
+from datetime import datetime
 
 # Flask and related imports
 from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 from flask_cors import CORS
+import asgiref.wsgi
 
-# Configure logging
-log_dir = Path(__file__).parent.parent / 'logfiles'
-log_dir.mkdir(exist_ok=True)
-log_file = log_dir / 'web_debug.log'
+# Add the parent directory to sys.path
+parent_dir = str(Path(__file__).resolve().parent.parent)
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
-# Create file handler with debug level
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+from spotscrape import SpotScraper, setup_logging, FileHandler
 
-# Create console handler with info level
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
-
-# Configure logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-# Prevent duplicate logging
-logger.propagate = False
-
-# Add parent directory to Python path to import spotscrape
-sys.path.append(str(Path(__file__).parent.parent))
-from spotscrape import SpotScraper, ClientManager
-
+# Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-
-# Socket.IO setup with more detailed configuration
+CORS(app)
 socketio = SocketIO(
     app,
-    async_mode='eventlet',
     cors_allowed_origins="*",
-    logger=True,
-    engineio_logger=True,
+    async_mode='eventlet',
     ping_timeout=60,
     ping_interval=25,
-    max_http_buffer_size=1e8,
-    manage_session=False
+    logger=True,
+    engineio_logger=True
 )
 
-@app.before_request
-def log_request_info():
-    """Log details of every request"""
-    if request.is_json:
-        logger.debug('Headers: %s', dict(request.headers))
-        logger.debug('Body: %s', request.get_json())
-    else:
-        logger.debug('Headers: %s', dict(request.headers))
-        logger.debug('Body: [non-JSON request]')
+# Set up logging
+def setup_web_logging():
+    """Set up logging for the web server with proper file handling"""
+    log_dir = Path(__file__).parent.parent / 'logfiles'
+    log_dir.mkdir(exist_ok=True)
+    
+    # Clean up old web debug logs
+    for old_log in log_dir.glob('web_debug_*.log'):
+        try:
+            old_log.unlink()
+        except Exception as e:
+            print(f"Warning: Could not delete old log file {old_log}: {e}")
+    
+    # Create new log file with timestamp
+    log_file = log_dir / f'web_debug_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    
+    return logging.getLogger(__name__)
 
-@app.after_request
+# Initialize logging
+logger = setup_web_logging()
+
+class WebLogger:
+    """Logger that emits messages via Socket.IO and writes to file"""
+    @staticmethod
+    def info(message):
+        logger.info(f"WebLogger.info: {message}")
+        logger.debug(f"Emitting socket message: {message}")
+        try:
+            # Log to spotscraper log
+            logging.getLogger('spotscrape').info(message)
+            # Emit via socket.io
+            socketio.emit('message', {'type': 'info', 'data': str(message)})
+            logger.debug("Socket message emitted successfully")
+        except Exception as e:
+            logger.error(f"Error emitting socket message: {e}")
+
+    @staticmethod
+    def error(message):
+        logger.error(f"WebLogger.error: {message}")
+        try:
+            # Log to spotscraper log
+            logging.getLogger('spotscrape').error(message)
+            # Emit via socket.io
+            socketio.emit('message', {'type': 'error', 'data': str(message)})
+        except Exception as e:
+            logger.error(f"Error emitting error message: {e}")
+
+    @staticmethod
+    def warning(message):
+        logger.warning(f"WebLogger.warning: {message}")
+        try:
+            # Log to spotscraper log
+            logging.getLogger('spotscrape').warning(message)
+            # Emit via socket.io
+            socketio.emit('message', {'type': 'warning', 'data': str(message)})
+        except Exception as e:
+            logger.error(f"Error emitting warning message: {e}")
+
+    @staticmethod
+    def debug(message):
+        logger.debug(f"WebLogger.debug: {message}")
+        try:
+            # Log to spotscraper log
+            logging.getLogger('spotscrape').debug(message)
+            # Emit via socket.io
+            socketio.emit('message', {'type': 'debug', 'data': str(message)})
+        except Exception as e:
+            logger.error(f"Error emitting debug message: {e}")
+
+def log_request_info(request):
+    """Log request details"""
+    logger.debug(f"Headers: {dict(request.headers)}")
+    if request.is_json:
+        logger.debug(f"Body: {request.get_json()}")
+    else:
+        logger.debug("Body: [non-JSON request]")
+
 def log_response_info(response):
-    """Log details of every response"""
-    try:
-        if response.is_json:
-            logger.debug('Response (JSON): %s', response.get_json())
-        else:
-            logger.debug('Response: [non-JSON response]')
-    except Exception as e:
-        logger.debug('Response logging error: %s', str(e))
+    """Log response details"""
+    if response.is_json:
+        logger.debug(f"Response (JSON): {response.get_json()}")
+    else:
+        logger.debug("Response: [non-JSON response]")
     return response
 
-def async_route(f):
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        logger.debug(f"Starting async route: {f.__name__}")
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(f(*args, **kwargs))
-            loop.close()
-            return result
-        except Exception as e:
-            logger.error(f"Error in async route {f.__name__}: {str(e)}", exc_info=True)
-            return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
-    return wrapped
+@app.before_request
+def before_request():
+    log_request_info(request)
 
-# Initialize SpotScraper with socket.io for real-time updates
-class WebLogger:
-    def __init__(self):
-        self.socket = socketio
-        self.logger = logger  # Use the app logger
-    
-    def info(self, message):
-        self.logger.info(message)
-        try:
-            self.socket.emit('message', {'data': str(message), 'type': 'info'})
-        except Exception as e:
-            self.logger.error(f"Error sending socket message: {e}")
-    
-    def error(self, message):
-        self.logger.error(message)
-        try:
-            self.socket.emit('message', {'data': f"Error: {str(message)}", 'type': 'error'})
-        except Exception as e:
-            self.logger.error(f"Error sending socket message: {e}")
-    
-    def warning(self, message):
-        self.logger.warning(message)
-        try:
-            self.socket.emit('message', {'data': f"Warning: {str(message)}", 'type': 'warning'})
-        except Exception as e:
-            self.logger.error(f"Error sending socket message: {e}")
-    
-    def debug(self, message):
-        self.logger.debug(message)
-        try:
-            self.socket.emit('message', {'data': str(message), 'type': 'debug'})
-        except Exception as e:
-            self.logger.error(f"Error sending socket message: {e}")
+@app.after_request
+def after_request(response):
+    return log_response_info(response)
 
-# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/api/files')
-def get_files():
-    """Get list of available JSON files"""
-    data_dir = Path('SpotScrape_data')
-    if not data_dir.exists():
-        return jsonify({'files': []})
-    
-    json_files = [f.name for f in data_dir.glob('*.json')]
-    return jsonify({'files': json_files})
-
-@app.route('/api/scan', methods=['POST'])
-@async_route
-async def scan():
-    """Handle webpage scanning"""
+@app.route('/scan', methods=['POST'])
+def scan():
+    """Handle scan requests"""
+    logger.debug("Starting scan route")
     try:
-        logger.debug("Received scan request")
-        data = request.json
-        url = data.get('url')
-        scan_type = data.get('type')
-        
-        logger.info(f"Starting {scan_type} scan for URL: {url}")
-        
-        if not url:
-            logger.warning("No URL provided in request")
-            return jsonify({'error': 'URL is required'}), 400
-        
-        # Initialize scraper with web logger
+        data = request.get_json()
+        if not data or 'url' not in data or 'type' not in data:
+            return jsonify({'error': 'Missing required fields'}), 400
+
+        url = data['url']
+        scan_type = data['type']
+        logger.debug(f"Received scan request for {url} with type {scan_type}")
+
+        # Initialize SpotScraper with WebLogger
         logger.debug("Initializing SpotScraper")
-        web_logger = WebLogger()
-        scraper = SpotScraper(logger=web_logger)
-        
-        # Perform scan based on type
-        try:
-            if scan_type == 'url':
-                destination_file = scraper._get_default_data_path('url')
-                logger.debug(f"URL scan - destination file: {destination_file}")
-                logger.debug("Starting scan_spotify_links")
-                result = await scraper.scan_spotify_links(url, destination_file)
-            else:  # gpt
-                destination_file = scraper._get_default_data_path('gpt')
-                logger.debug(f"GPT scan - destination file: {destination_file}")
-                logger.debug("Starting scan_webpage")
-                result = await scraper.scan_webpage(url, destination_file)
-            
-            logger.info(f"Scan completed. Found {len(result) if result else 0} items")
-            logger.debug(f"Scan result: {result}")
-            
-            # Return the results for review
-            response_data = {
-                'success': True,
-                'items': result,
-                'file': os.path.basename(destination_file)
-            }
-            logger.debug(f"Sending response: {response_data}")
-            return jsonify(response_data)
-            
-        except Exception as e:
-            logger.error(f"Scanning error: {str(e)}", exc_info=True)
-            import traceback
-            error_response = {
-                'error': f"Scanning error: {str(e)}",
-                'traceback': traceback.format_exc()
-            }
-            logger.debug(f"Sending error response: {error_response}")
-            return jsonify(error_response), 500
-            
-    except Exception as e:
-        logger.error(f"Request error: {str(e)}", exc_info=True)
-        import traceback
-        error_response = {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }
-        logger.debug(f"Sending error response: {error_response}")
-        return jsonify(error_response), 500
+        scraper = SpotScraper(logger=WebLogger)
 
-@app.route('/api/review', methods=['POST'])
-@async_route
-async def review_items():
-    """Handle review and filtering of scanned items"""
-    try:
-        data = request.json
-        items = data.get('items', [])
-        file_path = data.get('file')
-        
-        if not items or not file_path:
-            return jsonify({'error': 'Items and file path are required'}), 400
-        
-        # Save reviewed items
-        full_path = Path('SpotScrape_data') / file_path
-        with open(full_path, 'w') as f:
-            json.dump(items, f, indent=2)
-        
-        return jsonify({'success': True})
-    
+        def run_scan_sync():
+            async def run_scan():
+                try:
+                    if scan_type == 'url':
+                        logger.info(f"Starting URL scan for: {url}")
+                        socketio.emit('message', {'type': 'info', 'data': f"Starting scan for {url}"})
+                        
+                        # Set a timeout for the scan operation
+                        try:
+                            logger.debug("Starting scan_spotify_links with timeout")
+                            items = await asyncio.wait_for(
+                                scraper.scan_spotify_links(url),
+                                timeout=30  # 30 seconds timeout
+                            )
+                            logger.debug("scan_spotify_links completed")
+                            
+                            if items:
+                                logger.info(f"Found {len(items)} items")
+                                socketio.emit('message', {'type': 'info', 'data': f"Found {len(items)} items"})
+                                
+                                # Save items to file
+                                destination_file = scraper._get_default_data_path('url')
+                                handler = FileHandler(destination_file)
+                                await handler.save(items)
+                                logger.info(f"Saved items to {destination_file}")
+                                socketio.emit('message', {'type': 'info', 'data': f"Saved items to {destination_file}"})
+                                
+                                return {
+                                    'success': True,
+                                    'items': items,
+                                    'message': f"Found {len(items)} items"
+                                }
+                            else:
+                                logger.info("No items found")
+                                socketio.emit('message', {'type': 'info', 'data': "No items found"})
+                                return {
+                                    'success': True,
+                                    'items': [],
+                                    'message': "No items found"
+                                }
+                        except asyncio.TimeoutError:
+                            error_msg = "Scan operation timed out after 30 seconds"
+                            logger.error(error_msg)
+                            socketio.emit('message', {'type': 'error', 'data': error_msg})
+                            return {'error': error_msg}, 500
+                        except Exception as e:
+                            error_msg = f"Error during URL scan: {str(e)}"
+                            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+                            socketio.emit('message', {'type': 'error', 'data': error_msg})
+                            return {'error': str(e)}, 500
+                            
+                    elif scan_type == 'gpt':
+                        logger.info(f"Starting GPT scan for: {url}")
+                        socketio.emit('message', {'type': 'info', 'data': f"Starting GPT scan for {url}"})
+                        
+                        items = await scraper.scan_webpage(url)
+                        if items:
+                            logger.info(f"Found {len(items)} items")
+                            socketio.emit('message', {'type': 'info', 'data': f"Found {len(items)} items"})
+                            
+                            # Save items to file
+                            destination_file = scraper._get_default_data_path('gpt')
+                            handler = FileHandler(destination_file)
+                            await handler.save(items)
+                            logger.info(f"Saved items to {destination_file}")
+                            socketio.emit('message', {'type': 'info', 'data': f"Saved items to {destination_file}"})
+                            
+                            return {
+                                'success': True,
+                                'items': items,
+                                'message': f"Found {len(items)} items"
+                            }
+                        else:
+                            socketio.emit('message', {'type': 'info', 'data': "No items found"})
+                            return {
+                                'success': True,
+                                'items': [],
+                                'message': "No items found"
+                            }
+                    else:
+                        return {'error': 'Invalid scan type'}, 400
+                        
+                except Exception as e:
+                    error_msg = f"Error during {scan_type} scan: {str(e)}"
+                    logger.error(f"{error_msg}\n{traceback.format_exc()}")
+                    socketio.emit('message', {'type': 'error', 'data': error_msg})
+                    return {'error': str(e)}, 500
+
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(run_scan())
+            finally:
+                loop.close()
+
+        # Run the scan in an eventlet greenthread with timeout
+        try:
+            logger.debug("Starting eventlet spawn")
+            result = eventlet.with_timeout(
+                35,  # 35 seconds timeout (slightly longer than the inner timeout)
+                eventlet.spawn(run_scan_sync).wait
+            )
+            logger.debug("Eventlet spawn completed")
+            
+            if isinstance(result, tuple):
+                return jsonify(result[0]), result[1]
+            return jsonify(result)
+            
+        except eventlet.Timeout:
+            error_msg = "Operation timed out at server level"
+            logger.error(error_msg)
+            socketio.emit('message', {'type': 'error', 'data': error_msg})
+            return jsonify({'error': error_msg}), 504
+
     except Exception as e:
+        error_msg = f"Error in scan route: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        socketio.emit('message', {'type': 'error', 'data': error_msg})
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/playlist', methods=['POST'])
-@async_route
-async def create_playlist():
-    """Handle playlist creation"""
+@app.route('/get_json_files')
+def get_json_files():
+    """Get list of available JSON files"""
     try:
-        data = request.json
-        json_file = data.get('file')
-        playlist_name = data.get('name')
+        # Create a SpotScraper instance to use its methods
+        scraper = SpotScraper()
         
-        if not json_file:
-            return jsonify({'error': 'JSON file is required'}), 400
+        # Get paths for both types of files
+        url_file = os.path.basename(scraper._get_default_data_path('url'))
+        gpt_file = os.path.basename(scraper._get_default_data_path('gpt'))
         
-        # Initialize scraper with web logger
-        scraper = SpotScraper(logger=WebLogger())
-        
-        # Load JSON file
-        json_path = Path('SpotScrape_data') / json_file
-        if not json_path.exists():
-            return jsonify({'error': 'JSON file not found'}), 404
-        
-        with open(json_path) as f:
-            tracks = json.load(f)
-        
-        # Create playlist
-        playlist_id = await scraper.create_playlist(tracks, playlist_name)
-        return jsonify({
-            'success': True,
-            'playlist_id': playlist_id
-        })
-    
+        return jsonify({'files': [gpt_file, url_file]})
     except Exception as e:
+        logger.error(f"Error getting JSON files: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Initialize eventlet WSGI server
     logger.info("Starting Flask server with eventlet...")
-    socketio.run(app, debug=True, host='127.0.0.1', port=5000, use_reloader=True) 
+    socketio.run(app, debug=True) 

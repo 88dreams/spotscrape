@@ -1,8 +1,9 @@
-// Initialize Socket.IO with error handling
-const socket = io('http://localhost:5000', {
-    transports: ['websocket', 'polling'],
+// Initialize Socket.IO with reconnection settings
+const socket = io({
+    reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
     timeout: 60000
 });
 
@@ -11,14 +12,29 @@ socket.on('connect', () => {
     addMessage('Connected to server', 'info');
 });
 
-socket.on('connect_error', (error) => {
-    console.error('Connection error:', error);
-    addMessage('Connection error: ' + error.message, 'error');
-});
-
 socket.on('disconnect', (reason) => {
     console.log('Disconnected:', reason);
-    addMessage('Disconnected from server: ' + reason, 'warning');
+    addMessage(`Disconnected: ${reason}`, 'error');
+    
+    // Attempt to reconnect if not already trying
+    if (reason === 'io server disconnect') {
+        socket.connect();
+    }
+});
+
+socket.on('connect_error', (error) => {
+    console.log('Connection error:', error);
+    addMessage(`Connection error: ${error.message}`, 'error');
+});
+
+socket.on('reconnect', (attemptNumber) => {
+    console.log('Reconnected after', attemptNumber, 'attempts');
+    addMessage(`Reconnected after ${attemptNumber} attempts`, 'info');
+});
+
+socket.on('reconnect_attempt', (attemptNumber) => {
+    console.log('Attempting to reconnect:', attemptNumber);
+    addMessage(`Attempting to reconnect (${attemptNumber})`, 'info');
 });
 
 // DOM Elements
@@ -42,6 +58,9 @@ let currentFile = '';
 
 // Socket.IO message handling
 socket.on('message', function(data) {
+    console.log('Received socket message:', data);
+    
+    // Create message div
     const messageDiv = document.createElement('div');
     messageDiv.textContent = data.data;
     messageDiv.classList.add(data.type || 'info');
@@ -50,11 +69,14 @@ socket.on('message', function(data) {
     
     // Update console output for found items
     if (data.data.includes('Artist:') || data.data.includes('Album:') || 
-        data.data.includes('Found') || data.data.includes('Review')) {
+        data.data.includes('Found') || data.data.includes('Review found items')) {
+        
+        console.log('Processing found item or review message:', data.data);
         const consoleDiv = document.createElement('div');
         
         // Special handling for review prompt
-        if (data.data.includes('Review')) {
+        if (data.data.includes('Review found items')) {
+            console.log('Creating review section');
             consoleDiv.className = 'review-section';
             consoleDiv.innerHTML = `
                 <div class="review-header">${data.data}</div>
@@ -67,14 +89,17 @@ socket.on('message', function(data) {
             
             // Add event listeners
             consoleDiv.querySelector('.save-all').addEventListener('click', () => {
+                console.log('Save all clicked');
                 saveReviewedItems(currentItems);
             });
             
             consoleDiv.querySelector('.review-entries').addEventListener('click', () => {
+                console.log('Review entries clicked');
                 showReviewDialog(currentItems);
             });
             
             consoleDiv.querySelector('.remove-all').addEventListener('click', () => {
+                console.log('Remove all clicked');
                 if (confirm('Are you sure you want to remove all entries?')) {
                     currentItems = [];
                     addMessage('All entries removed', 'warning');
@@ -82,14 +107,68 @@ socket.on('message', function(data) {
             });
         } else {
             // Regular item display
+            console.log('Creating found item entry');
             consoleDiv.textContent = data.data;
+            consoleDiv.className = 'found-item';
+            
+            // If this is an artist/album entry, add it to the current items
             if (data.data.includes('Artist:') || data.data.includes('Album:')) {
-                consoleDiv.className = 'found-item';
+                const lines = data.data.split('\n');
+                const item = {};
+                lines.forEach(line => {
+                    if (line.includes('Artist:')) {
+                        item.artist = line.split('Artist:')[1].trim();
+                    } else if (line.includes('Album:')) {
+                        item.album = line.split('Album:')[1].trim();
+                    } else if (line.includes('Spotify URL:')) {
+                        item.spotify_url = line.split('Spotify URL:')[1].trim();
+                    }
+                });
+                if (Object.keys(item).length > 0) {
+                    currentItems.push(item);
+                }
             }
         }
         
         consoleOutput.appendChild(consoleDiv);
         consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    }
+    
+    // If this is a completion message, show the review options
+    if (data.data.includes('Scan completed successfully')) {
+        console.log('Scan completed, showing review options');
+        if (currentItems.length > 0) {
+            const reviewSection = document.createElement('div');
+            reviewSection.className = 'review-section mt-3';
+            reviewSection.innerHTML = `
+                <div class="alert alert-success">
+                    <h5>Scan completed! Found ${currentItems.length} items.</h5>
+                    <div class="mt-2">
+                        <button class="btn btn-primary btn-sm me-2 review-items">Review Items</button>
+                        <button class="btn btn-success btn-sm me-2 save-all">Save All</button>
+                        <button class="btn btn-danger btn-sm clear-items">Clear All</button>
+                    </div>
+                </div>
+            `;
+            
+            reviewSection.querySelector('.review-items').addEventListener('click', () => {
+                showReviewDialog(currentItems);
+            });
+            
+            reviewSection.querySelector('.save-all').addEventListener('click', () => {
+                saveReviewedItems(currentItems);
+            });
+            
+            reviewSection.querySelector('.clear-items').addEventListener('click', () => {
+                if (confirm('Are you sure you want to clear all items?')) {
+                    currentItems = [];
+                    consoleOutput.innerHTML = '';
+                    addMessage('All items cleared', 'warning');
+                }
+            });
+            
+            consoleOutput.appendChild(reviewSection);
+        }
     }
 });
 
@@ -120,23 +199,41 @@ if (clearMessagesButton) {
     });
 }
 
+// Function to get available JSON files
+async function getJsonFiles() {
+    try {
+        const response = await fetch('/get_json_files');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        return data.files;
+    } catch (error) {
+        console.error('Error getting JSON files:', error);
+        return [];
+    }
+}
+
 // Load available JSON files
-function loadJsonFiles() {
-    fetch('/api/files')
-        .then(response => response.json())
-        .then(data => {
-            jsonFileSelect.innerHTML = '<option value="">Select a file</option>';
-            data.files.forEach(file => {
-                const option = document.createElement('option');
-                option.value = file;
-                option.textContent = file;
-                jsonFileSelect.appendChild(option);
-            });
-        })
-        .catch(error => {
-            console.error('Error loading JSON files:', error);
-            addMessage('Error loading JSON files: ' + error.message, 'error');
-        });
+async function loadJsonFiles() {
+    const files = await getJsonFiles();
+    const fileList = document.getElementById('jsonFile');
+    if (!fileList) {
+        console.error('Could not find jsonFile select element');
+        return;
+    }
+    
+    // Clear existing options except the placeholder
+    while (fileList.options.length > 1) {
+        fileList.remove(1);
+    }
+    
+    files.forEach(file => {
+        const option = document.createElement('option');
+        option.value = file;
+        option.textContent = file;
+        fileList.appendChild(option);
+    });
 }
 
 // Add message to the messages div
@@ -148,152 +245,129 @@ function addMessage(message, type = 'info') {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-// Show review dialog
-function showReviewDialog(items) {
-    const reviewDiv = document.createElement('div');
-    reviewDiv.className = 'review-dialog';
-    reviewDiv.innerHTML = `
-        <div class="review-content">
-            <h4>Review Found Items</h4>
-            <div class="review-controls mb-3">
-                <div class="btn-group">
-                    <button class="btn btn-outline-primary btn-sm select-all">Select All</button>
-                    <button class="btn btn-outline-primary btn-sm deselect-all">Deselect All</button>
-                    <button class="btn btn-outline-danger btn-sm remove-selected">Remove Selected</button>
-                </div>
-            </div>
-            <div class="items-list">
-                ${items.map((item, index) => `
-                    <div class="item" data-index="${index}">
-                        <div class="d-flex align-items-center">
-                            <input type="checkbox" class="form-check-input me-2" checked>
-                            <div class="item-details flex-grow-1">
-                                <div class="fw-bold">${item.artist || 'Unknown Artist'}</div>
-                                <div class="text-muted small">${item.album || 'Unknown Album'}</div>
-                                ${item.spotify_url ? `<div class="text-muted small">URL: ${item.spotify_url}</div>` : ''}
-                            </div>
-                            <button class="btn btn-outline-danger btn-sm remove-item" title="Remove this item">×</button>
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-            <div class="review-summary mt-3 mb-3">
-                <div class="alert alert-info">
-                    <strong>Total Items:</strong> <span class="total-count">${items.length}</span>
-                    <br>
-                    <strong>Selected:</strong> <span class="selected-count">${items.length}</span>
-                </div>
-            </div>
-            <div class="review-actions">
-                <button class="btn btn-primary save-items">Save Selected Items</button>
-                <button class="btn btn-secondary cancel-review">Cancel</button>
-            </div>
-        </div>
-    `;
+// Function to handle form submission
+async function handleScan(event) {
+    event.preventDefault();
+    console.log('Form submitted');
     
-    document.body.appendChild(reviewDiv);
+    const url = document.getElementById('url').value.trim();
+    const scanType = document.querySelector('input[name="scanType"]:checked').value;
     
-    // Update counts
-    function updateCounts() {
-        const total = reviewDiv.querySelectorAll('.item').length;
-        const selected = reviewDiv.querySelectorAll('.item input[type="checkbox"]:checked').length;
-        reviewDiv.querySelector('.total-count').textContent = total;
-        reviewDiv.querySelector('.selected-count').textContent = selected;
+    if (!url) {
+        addMessage('Please enter a URL', 'error');
+        return;
     }
     
-    // Select/Deselect all
-    reviewDiv.querySelector('.select-all').addEventListener('click', () => {
-        reviewDiv.querySelectorAll('.item input[type="checkbox"]').forEach(checkbox => {
-            checkbox.checked = true;
+    // Disable the scan button during scan
+    scanButton.disabled = true;
+    
+    console.log(`Scanning ${scanType} for URL: ${url}`);
+    addMessage(`Starting ${scanType} scan for URL: ${url}`, 'info');
+    
+    console.log('Sending fetch request...');
+    try {
+        const response = await fetch('/scan', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                url: url,
+                type: scanType
+            })
         });
-        updateCounts();
-    });
-    
-    reviewDiv.querySelector('.deselect-all').addEventListener('click', () => {
-        reviewDiv.querySelectorAll('.item input[type="checkbox"]').forEach(checkbox => {
-            checkbox.checked = false;
-        });
-        updateCounts();
-    });
-    
-    // Remove selected items
-    reviewDiv.querySelector('.remove-selected').addEventListener('click', () => {
-        const itemsToRemove = Array.from(reviewDiv.querySelectorAll('.item input[type="checkbox"]:checked'))
-            .map(checkbox => checkbox.closest('.item'));
-        itemsToRemove.forEach(item => item.remove());
-        updateCounts();
-    });
-    
-    // Individual item removal
-    reviewDiv.querySelectorAll('.remove-item').forEach(button => {
-        button.addEventListener('click', () => {
-            button.closest('.item').remove();
-            updateCounts();
-        });
-    });
-    
-    // Checkbox change handler
-    reviewDiv.querySelectorAll('.item input[type="checkbox"]').forEach(checkbox => {
-        checkbox.addEventListener('change', updateCounts);
-    });
-    
-    // Handle save action
-    reviewDiv.querySelector('.save-items').addEventListener('click', () => {
-        const selectedItems = [];
-        reviewDiv.querySelectorAll('.item').forEach((itemDiv, index) => {
-            if (itemDiv.querySelector('input[type="checkbox"]').checked) {
-                selectedItems.push(items[itemDiv.dataset.index]);
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (data.success) {
+            addMessage('Scan completed successfully!', 'success');
+            if (data.items && data.items.length > 0) {
+                showReviewDialog(data.items);
+            } else {
+                addMessage('No items found', 'warning');
             }
-        });
-        
-        if (selectedItems.length === 0) {
-            addMessage('No items selected to save', 'warning');
-            return;
+        } else {
+            addMessage(`Error: ${data.error}`, 'error');
         }
-        
-        currentItems = selectedItems;
-        saveJsonButton.classList.remove('d-none');
-        addMessage(`${selectedItems.length} items selected for saving`, 'info');
-        reviewDiv.remove();
-    });
-    
-    // Handle cancel
-    reviewDiv.querySelector('.cancel-review').addEventListener('click', () => {
-        if (confirm('Are you sure you want to cancel? All changes will be lost.')) {
-            reviewDiv.remove();
-        }
-    });
-    
-    // Initial count update
-    updateCounts();
+    } catch (error) {
+        console.error('Error:', error);
+        addMessage(`Error: ${error.message}`, 'error');
+    } finally {
+        // Re-enable the scan button
+        scanButton.disabled = false;
+    }
 }
 
-// Save reviewed items
-function saveReviewedItems(items, customPath = null) {
-    const data = {
-        items: items,
-        file: customPath || currentFile
-    };
+// Function to show review dialog
+function showReviewDialog(items) {
+    const reviewSection = document.getElementById('review-section');
+    const itemsList = document.getElementById('items-list');
+    itemsList.innerHTML = '';
     
-    fetch('/api/review', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data)
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.error) {
-            throw new Error(data.error);
-        }
-        addMessage('Items saved successfully', 'success');
-        loadJsonFiles();  // Refresh the JSON files list
-        saveJsonButton.classList.add('d-none');
-    })
-    .catch(error => {
-        addMessage('Error saving items: ' + error.message, 'error');
+    items.forEach((item, index) => {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = 'review-item';
+        itemDiv.innerHTML = `
+            <input type="checkbox" id="item-${index}" checked>
+            <label for="item-${index}">
+                Artist: ${item.artist}<br>
+                Album: ${item.album}<br>
+                Spotify URL: ${item.spotify_url}
+            </label>
+        `;
+        itemsList.appendChild(itemDiv);
     });
+    
+    reviewSection.style.display = 'block';
+    
+    // Add event listeners for review buttons
+    document.getElementById('save-all').onclick = () => saveItems(items);
+    document.getElementById('remove-all').onclick = () => {
+        itemsList.innerHTML = '';
+        reviewSection.style.display = 'none';
+    };
+}
+
+// Function to save reviewed items
+async function saveItems(items) {
+    const checkedItems = Array.from(document.querySelectorAll('.review-item input:checked'))
+        .map(checkbox => items[parseInt(checkbox.id.split('-')[1])]);
+    
+    if (checkedItems.length === 0) {
+        addMessage('No items selected to save', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/save_items', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                items: checkedItems
+            })
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        if (data.success) {
+            addMessage('Items saved successfully!', 'success');
+            document.getElementById('review-section').style.display = 'none';
+            loadJsonFiles();  // Refresh the file list
+        } else {
+            addMessage(`Error saving items: ${data.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        addMessage(`Error saving items: ${error.message}`, 'error');
+    }
 }
 
 // Handle save JSON button
@@ -308,90 +382,7 @@ saveJsonButton.addEventListener('click', function() {
 });
 
 // Handle scan form submission
-scanForm.addEventListener('submit', async function(e) {
-    e.preventDefault();
-    console.log('Form submitted'); // Debug log
-    
-    const urlInput = document.getElementById('url');
-    const url = urlInput.value.trim();
-    const scanType = document.querySelector('input[name="scanType"]:checked').value;
-    
-    if (!url) {
-        addMessage('Please enter a URL to scan', 'error');
-        return;
-    }
-    
-    console.log(`Scanning ${scanType} for URL: ${url}`); // Debug log
-    
-    // Clear previous results but keep the URL
-    consoleOutput.innerHTML = '';
-    saveJsonButton.classList.add('d-none');
-    
-    // Disable only the scan button during scan
-    scanButton.disabled = true;
-    addMessage(`Starting ${scanType} scan of ${url}...`);
-    
-    try {
-        console.log('Sending fetch request...'); // Debug log
-        const response = await fetch('/api/scan', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                url: url,
-                type: scanType
-            })
-        });
-        console.log('Received response:', response.status); // Debug log
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            console.error('Response not OK:', errorData); // Debug log
-            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        console.log('Scan response data:', data); // Debug log
-
-        if (data.error) {
-            throw new Error(data.error);
-        }
-
-        addMessage('Scan completed successfully', 'success');
-        
-        if (!data.items || data.items.length === 0) {
-            addMessage('No items found in the scan', 'warning');
-            return;
-        }
-        
-        // Store current items and file
-        currentItems = data.items;
-        currentFile = data.file;
-        
-        // Show review dialog
-        showReviewDialog(data.items);
-        
-    } catch (error) {
-        console.error('Scan error:', error); // Debug log
-        let errorMessage = error.message;
-        
-        // Try to parse the error response for more details
-        try {
-            const errorData = await error.response?.json();
-            if (errorData?.traceback) {
-                console.error('Error traceback:', errorData.traceback);
-                errorMessage = errorData.error || errorMessage;
-            }
-        } catch (e) {
-            console.error('Error parsing error response:', e);
-        }
-        
-        addMessage(`Error during scan: ${errorMessage}`, 'error');
-    } finally {
-        scanButton.disabled = false;
-    }
-});
+scanForm.addEventListener('submit', handleScan);
 
 // Handle playlist form submission
 playlistForm.addEventListener('submit', function(e) {

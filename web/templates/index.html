@@ -25,10 +25,10 @@
                         <h5 class="card-title mb-0">Scan Webpage</h5>
                     </div>
                     <div class="card-body">
-                        <form id="scanForm">
+                        <form id="scanForm" autocomplete="off" novalidate>
                             <div class="mb-3">
                                 <label for="url" class="form-label">URL to Scan</label>
-                                <input type="url" class="form-control" id="url" required>
+                                <input type="url" class="form-control" id="url" required placeholder="Enter webpage URL...">
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Scan Type</label>
@@ -45,7 +45,46 @@
                                     </label>
                                 </div>
                             </div>
-                            <button type="submit" class="btn btn-primary" id="scanButton">Start Scan</button>
+                            <div class="mb-3">
+                                <label class="form-label">Save Options</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="saveType" id="defaultSave" value="default" checked>
+                                    <label class="form-check-label" for="defaultSave">
+                                        Use Default Location
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="radio" name="saveType" id="customSave" value="custom">
+                                    <label class="form-check-label" for="customSave">
+                                        Choose Location
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="mb-3 custom-save-options d-none">
+                                <input type="file" 
+                                    id="jsonFilePicker" 
+                                    class="d-none" 
+                                    nwsaveas="musicdata.json" 
+                                    accept=".json"
+                                    aria-label="Choose JSON file location"
+                                    title="Choose JSON file location">
+                                <div class="input-group">
+                                    <input type="text" 
+                                        class="form-control" 
+                                        id="customJsonPath" 
+                                        placeholder="JSON file location..." 
+                                        readonly
+                                        aria-label="Selected JSON file path">
+                                    <button class="btn btn-outline-secondary" 
+                                        type="button" 
+                                        id="browseButton"
+                                        aria-label="Browse for JSON file location">Browse</button>
+                                </div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-primary" id="scanButton">Start Scan</button>
+                                <button type="button" class="btn btn-success d-none" id="saveJsonButton">Save to JSON</button>
+                            </div>
                         </form>
                     </div>
                 </div>
@@ -80,13 +119,27 @@
         <div class="row">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="card-title mb-0">Status Messages</h5>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="clearMessages">
+                            Clear Messages
+                        </button>
                     </div>
                     <div class="card-body">
                         <div id="messages" class="border rounded p-3 bg-white" style="height: 300px; overflow-y: auto;">
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Console Output -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Found Items</h5>
+            </div>
+            <div class="card-body">
+                <div id="consoleOutput" class="border rounded p-3 bg-light" style="height: 200px; overflow-y: auto; font-family: monospace;">
                 </div>
             </div>
         </div>

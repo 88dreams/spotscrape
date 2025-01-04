@@ -76,10 +76,6 @@ def setup_logging():
     log_number = get_next_log_number()
     log_file = os.path.normpath(os.path.join(log_dir, f"spotscraper{log_number}.log"))
     
-    # Delete the existing log file if it exists
-    if os.path.exists(log_file):
-        os.remove(log_file)
-
     # Create formatter
     detailed_formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
@@ -89,7 +85,7 @@ def setup_logging():
         # Set up file handler
         file_handler = RotatingFileHandler(
             log_file,
-            mode='w',  # Open the file in write mode to overwrite
+            mode='a',  # Open in append mode to prevent conflicts
             maxBytes=10*1024*1024,  # 10MB
             backupCount=5,
             encoding='utf-8'
@@ -98,9 +94,10 @@ def setup_logging():
         file_handler.setFormatter(detailed_formatter)
         
         # Configure module logger only
-        logger.handlers.clear()
+        logger.handlers.clear()  # Clear existing handlers
         logger.addHandler(file_handler)
         logger.setLevel(logging.DEBUG)
+        logger.propagate = False  # Prevent duplicate logging
         
         print(f"Logging to file: {log_file}")
         return log_file
@@ -776,420 +773,241 @@ class ResourceManager:
             self._resources.clear()
 
 class SpotScraper:
-    """Main class for handling webpage scanning and playlist creation"""
+    """Main class for scanning and managing Spotify links"""
     def __init__(self, logger=None):
-        # Initialize logger
         self.logger = logger or logging.getLogger(__name__)
-        self.playlist_manager = PlaylistManager()
-        self.search_manager = SpotifySearchManager()
-        self.file_handler = None
-        self._browser = None
-        self._playwright = None
-        self._browser_lock = AsyncLock()
-        self._resource_manager = ResourceManager()
+        self._lock = AsyncLock()
+        self._spotify = None
+        self._file_handlers = {}
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.cleanup()
-
-    async def cleanup(self):
-        """Clean up all resources"""
-        await self._resource_manager.cleanup()
-        await self._cleanup_browser()
-
-    async def _cleanup_browser(self):
-        """Clean up browser resources"""
-        async with self._browser_lock:
-            if self._browser:
-                await self._browser.close()
-                self._browser = None
-            if self._playwright:
-                await self._playwright.stop()
-                self._playwright = None
-
-    async def _get_browser(self):
-        """Get or create browser instance with resource management"""
-        async with self._browser_lock:
-            if not self._browser:
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True,
-                    args=[
-                        '--disable-gpu',
-                        '--no-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-setuid-sandbox'
-                    ]
-                )
-                await self._resource_manager.register(self._browser)
-            return self._browser
-
-    @retry_with_backoff(retries=3)
-    async def _get_page_content(self, url: str) -> str:
-        """Get page content with shared browser instance and retries"""
-        browser = await self._get_browser()
-        context = await browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
-        
-        try:
-            page = await context.new_page()
-            response = await page.goto(url, wait_until='domcontentloaded', timeout=30000)
-            
-            if not response:
-                raise Exception("Failed to get response from page")
-            
-            if response.status >= 400:
-                raise Exception(f"HTTP error {response.status}: {response.status_text}")
-            
-            content = await page.content()
-            
-            if not content.strip():
-                raise Exception("Received empty page content")
-            
-            return content
-        except Exception as e:
-            logger.error(f"Error fetching page content: {str(e)}")
-            raise
-        finally:
-            await context.close()
+    async def _get_spotify(self):
+        """Get or initialize Spotify client"""
+        if not self._spotify:
+            self._spotify = await ClientManager.get_spotify()
+        return self._spotify
 
     def _get_default_data_path(self, scan_type: str) -> str:
-        """Get the default path for saving scan results"""
-        # Create SpotScrape_data directory in script directory
-        data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'SpotScrape_data')
+        """Get the default path for saving scan data"""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(script_dir, 'SpotScrape_data')
         os.makedirs(data_dir, exist_ok=True)
         
-        # Use standardized filenames based on scan type
         if scan_type == 'url':
-            filename = 'musicdata_url.json'
+            return os.path.join(data_dir, 'musicdata_url.json')
         elif scan_type == 'gpt':
-            filename = 'musicdata_gpt.json'
+            return os.path.join(data_dir, 'musicdata_gpt.json')
         else:
             raise ValueError(f"Invalid scan type: {scan_type}")
-            
-        return os.path.join(data_dir, filename)
 
-    async def review_and_filter_items(self, items: List[Dict]) -> List[Dict]:
-        """Allow user to review and filter items before saving"""
-        if not items:
-            user_message("No items found to review.")
-            return []
-
-        user_message("\nFound the following entries:")
-        for idx, item in enumerate(items, 1):
-            user_message(f"{idx}. Artist: {item['artist']} | Album: {item['album']}")
-
-        while True:
-            user_message("\nOptions:")
-            user_message("1. Save all entries")
-            user_message("2. Remove specific entries")
-            user_message("3. Remove all entries")
-            
-            choice = input("\nEnter your choice (1-3): ").strip()
-            
-            if choice == "1":
-                return items
-            elif choice == "2":
-                while True:
-                    to_remove = input("\nEnter entry numbers to remove (comma-separated) or 'done' to finish: ").strip().lower()
-                    if to_remove == 'done':
-                        break
-                    
-                    try:
-                        # Convert input to list of indices
-                        indices = [int(x.strip()) for x in to_remove.split(',')]
-                        # Validate indices
-                        if any(idx < 1 or idx > len(items) for idx in indices):
-                            user_message("Invalid entry number(s). Please try again.")
-                            continue
-                        
-                        # Remove items in reverse order to maintain correct indices
-                        for idx in sorted(indices, reverse=True):
-                            removed = items.pop(idx - 1)
-                            user_message(f"Removed: {removed['artist']} - {removed['album']}")
-                        
-                        # Show remaining entries
-                        user_message("\nRemaining entries:")
-                        for idx, item in enumerate(items, 1):
-                            user_message(f"{idx}. Artist: {item['artist']} | Album: {item['album']}")
-                        
-                    except ValueError:
-                        user_message("Invalid input. Please enter numbers separated by commas.")
-                        continue
-                return items
-            elif choice == "3":
-                confirm = input("Are you sure you want to remove all entries? (y/n): ").strip().lower()
-                if confirm == 'y':
-                    return []
-            else:
-                user_message("Invalid choice. Please enter 1-3.")
-
-    async def prompt_create_playlist(self, items: List[Dict]) -> None:
-        """Prompt user to create a playlist from confirmed items"""
-        if not items:
-            return
-            
-        user_message("\nWould you like to create a playlist from these entries? (y/n): ")
-        choice = input().strip().lower()
+    @retry_with_backoff(retries=3)
+    async def scan_spotify_links(self, url: str) -> List[Dict]:
+        """Scan a webpage for Spotify links"""
+        self.logger.info(f"Scanning URL: {url}")
         
-        if choice == 'y':
-            playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-            await self.create_playlist(items, playlist_name)
-            user_message("Playlist created successfully!")
-
-    async def scan_spotify_links(self, url: str, destination_file: str = None) -> List[Dict]:
-        """Scan webpage for Spotify links and extract metadata"""
+        spotify_patterns = [
+            'spotify.com/track/',
+            'spotify.com/album/',
+            'spotify.com/artist/',
+            'spotify:track:',
+            'spotify:album:',
+            'spotify:artist:'
+        ]
+        
+        url_pattern = r'https?://[^\s<>"]+?(?:{})[^\s<>"]*'.format('|'.join(spotify_patterns))
+        
         try:
-            if destination_file is None:
-                destination_file = self._get_default_data_path('url')
-            
-            self.file_handler = FileHandler(destination_file)
-            self.logger.info(f"Scanning {url} for Spotify links...")
-            
-            content = await self._get_page_content(url)
-            soup = BeautifulSoup(content, 'html.parser')
-            spotify_links = []
-            
-            # Expanded pattern to match various Spotify URL formats
-            spotify_patterns = [
-                'spotify.com/track/',
-                'spotify.com/album/',
-                'spotify.com/artist/',
-                'spotify:track:',
-                'spotify:album:',
-                'spotify:artist:'
-            ]
-            
-            # Search in various locations and collect raw links
-            raw_links = set()
-            
-            # Search in href attributes
-            for link in soup.find_all('a'):
-                href = link.get('href', '')
-                if any(pattern in href for pattern in spotify_patterns):
-                    raw_links.add(href)
-            
-            # Search in embedded iframes
-            for iframe in soup.find_all('iframe'):
-                src = iframe.get('src', '')
-                if any(pattern in src for pattern in spotify_patterns):
-                    raw_links.add(src)
-            
-            # Search in data attributes
-            for element in soup.find_all(attrs={'data-spotify-url': True}):
-                spotify_url = element['data-spotify-url']
-                if any(pattern in spotify_url for pattern in spotify_patterns):
-                    raw_links.add(spotify_url)
-            
-            # Search in text content for Spotify URLs
-            text_content = soup.get_text()
-            url_pattern = r'https?://[^\s<>"]+?(?:{})[^\s<>"]*'.format('|'.join(spotify_patterns))
-            matches = re.finditer(url_pattern, text_content, re.IGNORECASE)
-            for match in matches:
-                raw_links.add(match.group())
-            
-            # Process each unique link to get metadata
-            spotify = await ClientManager.get_spotify()
-            timestamp = datetime.now().isoformat()
-            
-            for spotify_url in raw_links:
-                try:
-                    # Extract Spotify ID and type from URL
-                    if 'spotify:' in spotify_url:
-                        # Handle Spotify URI format
-                        parts = spotify_url.split(':')
-                        item_type = parts[-2]
-                        item_id = parts[-1]
-                    else:
-                        # Handle HTTP URL format
-                        parts = spotify_url.rstrip('/').split('/')
-                        item_type = parts[-2]
-                        item_id = parts[-1].split('?')[0]
+            self.logger.debug("Creating aiohttp session")
+            async with aiohttp.ClientSession() as session:
+                self.logger.debug(f"Fetching URL: {url}")
+                async with session.get(url, timeout=10) as response:
+                    if response.status != 200:
+                        raise Exception(f"Failed to fetch URL: {response.status}")
                     
-                    # Get metadata based on type
-                    if item_type == 'track':
-                        track = spotify.track(item_id)
-                        spotify_links.append({
-                            'artist': track['artists'][0]['name'],
-                            'album': track['album']['name'],
-                            'spotify_url': spotify_url,
-                            'source_url': url,
-                            'timestamp': timestamp
-                        })
-                    elif item_type == 'album':
-                        album = spotify.album(item_id)
-                        spotify_links.append({
-                            'artist': album['artists'][0]['name'],
-                            'album': album['name'],
-                            'spotify_url': spotify_url,
-                            'source_url': url,
-                            'timestamp': timestamp
-                        })
-                    # Skip artist links as they don't have album info
+                    self.logger.debug("Reading response content")
+                    content = await response.text()
+                    self.logger.debug(f"Fetched content length: {len(content)}")
                     
-                except Exception as e:
-                    self.logger.warning(f"Error processing Spotify URL {spotify_url}: {e}")
-                    continue
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_links = []
-            for link in spotify_links:
-                key = f"{link['artist']} - {link['album']} - {link['spotify_url']}"
-                if key not in seen:
-                    seen.add(key)
-                    unique_links.append(link)
-            
-            # Add review step before saving
-            user_message("\nReview found items before saving:")
-            filtered_items = await self.review_and_filter_items(unique_links)
-            
-            if filtered_items:
-                await self.file_handler.save(filtered_items)
-                self.logger.info(f"Saved {len(filtered_items)} items to {destination_file}")
-                # Prompt to create playlist after saving
-                await self.prompt_create_playlist(filtered_items)
-            else:
-                self.logger.info("No items were saved (all filtered out)")
-            
-            return filtered_items
-            
+                    # Parse HTML and find links
+                    self.logger.debug("Parsing HTML content")
+                    soup = BeautifulSoup(content, 'html.parser')
+                    
+                    # Look for links in various places
+                    links = set()
+                    
+                    # Check <a> tags
+                    self.logger.debug("Searching for links in <a> tags")
+                    for a in soup.find_all('a', href=True):
+                        if re.search(url_pattern, a['href']):
+                            links.add(a['href'])
+                    
+                    # Check embedded iframes
+                    self.logger.debug("Searching for links in iframes")
+                    for iframe in soup.find_all('iframe', src=True):
+                        if re.search(url_pattern, iframe['src']):
+                            links.add(iframe['src'])
+                    
+                    # Check for links in text content using regex
+                    self.logger.debug("Searching for links in text content")
+                    text_content = soup.get_text()
+                    links.update(re.findall(url_pattern, text_content))
+                    
+                    self.logger.info(f"Found {len(links)} raw Spotify links")
+                    
+                    # Process found links
+                    items = []
+                    spotify = await self._get_spotify()
+                    
+                    self.logger.debug("Processing found links")
+                    for link in links:
+                        try:
+                            if 'track' in link:
+                                self.logger.debug(f"Processing track link: {link}")
+                                track_id = link.split('/')[-1].split('?')[0]
+                                track = spotify.track(track_id)
+                                items.append({
+                                    'artist': track['artists'][0]['name'],
+                                    'album': track['album']['name'],
+                                    'spotify_url': link,
+                                    'source_url': url,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+                                self.logger.debug(f"Added track: {track['artists'][0]['name']} - {track['album']['name']}")
+                            elif 'album' in link:
+                                self.logger.debug(f"Processing album link: {link}")
+                                album_id = link.split('/')[-1].split('?')[0]
+                                album = spotify.album(album_id)
+                                items.append({
+                                    'artist': album['artists'][0]['name'],
+                                    'album': album['name'],
+                                    'spotify_url': link,
+                                    'source_url': url,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+                                self.logger.debug(f"Added album: {album['artists'][0]['name']} - {album['name']}")
+                        except Exception as e:
+                            self.logger.warning(f"Error processing link {link}: {str(e)}")
+                            continue
+                    
+                    self.logger.info(f"Found {len(items)} unique Spotify items")
+                    return items
+                    
         except Exception as e:
-            self.logger.error(f"Error scanning URL {url}: {e}")
+            self.logger.error(f"Error scanning URL {url}: {str(e)}")
             raise
 
+    @retry_with_backoff(retries=3)
     async def scan_webpage(self, url: str, destination_file: str = None) -> List[Dict]:
-        """Scan webpage using GPT for music content"""
+        """Scan a webpage using GPT to extract music information"""
+        self.logger.info(f"Scanning webpage with GPT: {url}")
+        
         try:
-            if destination_file is None:
-                destination_file = self._get_default_data_path('gpt')
-            
-            self.file_handler = FileHandler(destination_file)
-            self.logger.info(f"Scanning {url} using GPT...")
-            
-            content = await self._get_page_content(url)
-            extracted_items = await process_with_gpt(content)
-            timestamp = datetime.now().isoformat()
-            
-            # Get Spotify client for searching
-            spotify = await ClientManager.get_spotify()
-            formatted_items = []
-            
-            for item in extracted_items:
-                try:
-                    # Search based on item type
-                    if item['type'] == 'song':
-                        query = f"artist:{item['artist']} track:{item['title']}"
-                        results = spotify.search(q=query, type='track', limit=1)
-                        
-                        if results and results['tracks']['items']:
-                            track = results['tracks']['items'][0]
-                            formatted_items.append({
-                                'artist': track['artists'][0]['name'],
-                                'album': track['album']['name'],
-                                'spotify_url': track['external_urls']['spotify'],
-                                'source_url': url,
-                                'timestamp': timestamp
-                            })
-                    elif item['type'] == 'album':
-                        query = f"artist:{item['artist']} album:{item['title']}"
-                        results = spotify.search(q=query, type='album', limit=1)
-                        
-                        if results and results['albums']['items']:
-                            album = results['albums']['items'][0]
-                            formatted_items.append({
-                                'artist': album['artists'][0]['name'],
-                                'album': album['name'],
-                                'spotify_url': album['external_urls']['spotify'],
-                                'source_url': url,
-                                'timestamp': timestamp
-                            })
-                except Exception as e:
-                    self.logger.warning(f"Error processing item {item}: {e}")
-                    continue
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_items = []
-            for item in formatted_items:
-                key = f"{item['artist']} - {item['album']} - {item['spotify_url']}"
-                if key not in seen:
-                    seen.add(key)
-                    unique_items.append(item)
-            
-            # Add review step before saving
-            user_message("\nReview found items before saving:")
-            filtered_items = await self.review_and_filter_items(unique_items)
-            
-            if filtered_items:
-                await self.file_handler.save(filtered_items)
-                self.logger.info(f"Saved {len(filtered_items)} items to {destination_file}")
-                # Prompt to create playlist after saving
-                await self.prompt_create_playlist(filtered_items)
-            else:
-                self.logger.info("No items were saved (all filtered out)")
-            
-            return filtered_items
-            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        raise Exception(f"Failed to fetch URL: {response.status}")
+                    
+                    content = await response.text()
+                    
+                    # Use GPT to extract music information
+                    client = ClientManager.get_openai()
+                    completion = client.chat.completions.create(
+                        model="gpt-4",
+                        messages=[
+                            {"role": "system", "content": "You are a music information extractor. Extract artist names and album titles from the given text."},
+                            {"role": "user", "content": content}
+                        ]
+                    )
+                    
+                    # Process GPT response
+                    items = []
+                    spotify = await self._get_spotify()
+                    
+                    for line in completion.choices[0].message.content.split('\n'):
+                        if ':' in line:
+                            try:
+                                artist, album = line.split(':', 1)
+                                search_query = f"artist:{artist.strip()} album:{album.strip()}"
+                                results = spotify.search(search_query, type='album')
+                                
+                                if results['albums']['items']:
+                                    album_info = results['albums']['items'][0]
+                                    items.append({
+                                        'artist': album_info['artists'][0]['name'],
+                                        'album': album_info['name'],
+                                        'spotify_url': album_info['external_urls']['spotify'],
+                                        'source_url': url,
+                                        'timestamp': datetime.now().isoformat()
+                                    })
+                            except Exception as e:
+                                self.logger.warning(f"Error processing GPT result: {str(e)}")
+                    
+                    self.logger.info(f"Found {len(items)} items from GPT analysis")
+                    
+                    # Save to file if destination is provided
+                    if destination_file:
+                        handler = FileHandler(destination_file)
+                        await handler.save(items)
+                        self.logger.info(f"Saved items to {destination_file}")
+                    
+                    return items
+                    
         except Exception as e:
-            self.logger.error(f"Error scanning URL {url}: {e}")
+            self.logger.error(f"Error scanning webpage {url}: {str(e)}")
             raise
 
-    async def create_playlist(self, tracks: List[Dict], name: str = None) -> str:
-        """Create a Spotify playlist from the extracted tracks"""
+    async def create_playlist(self, json_file: str, playlist_name: str = None) -> str:
+        """Create a Spotify playlist from a JSON file of tracks"""
+        self.logger.info(f"Creating playlist from {json_file}")
+        
         try:
-            if not name:
-                name = f"SpotScrape Playlist {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            # Load items from JSON
+            handler = FileHandler(json_file)
+            items = await handler.load()
             
-            self.logger.info(f"Creating playlist: {name}")
-            playlist_id = await self.playlist_manager.create_playlist(name)
+            if not items:
+                raise ValueError("No items found in JSON file")
             
-            # Process tracks in batches
-            batch_size = 50
+            # Generate playlist name if not provided
+            if not playlist_name:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                playlist_name = f"SpotScrape Playlist {timestamp}"
+            
+            # Create playlist
+            spotify = await self._get_spotify()
+            user_id = spotify.current_user()['id']
+            playlist = spotify.user_playlist_create(
+                user_id,
+                playlist_name,
+                public=False,
+                description="Created by SpotScrape"
+            )
+            
+            # Add tracks to playlist
             track_uris = []
-            
-            for track in tracks:
+            for item in items:
                 try:
-                    spotify_url = track.get('spotify_url')
-                    if not spotify_url:
-                        continue
-                        
-                    # Extract the ID and type from the Spotify URL
-                    parts = spotify_url.rstrip('/').split('/')
-                    item_type = parts[-2]  # 'album' or 'track'
-                    item_id = parts[-1].split('?')[0]
-                    
-                    if item_type == 'track':
-                        # If it's already a track, add it directly
-                        track_uris.append(f"spotify:track:{item_id}")
-                    elif item_type == 'album':
-                        # If it's an album, get all its tracks
-                        spotify = await ClientManager.get_spotify()
-                        album_tracks = spotify.album_tracks(item_id)
-                        track_uris.extend([
-                            f"spotify:track:{t['id']}" 
-                            for t in album_tracks['items']
-                        ])
+                    if 'spotify_url' in item:
+                        if 'track' in item['spotify_url']:
+                            track_uris.append(item['spotify_url'])
+                        elif 'album' in item['spotify_url']:
+                            album_tracks = spotify.album_tracks(item['spotify_url'])
+                            track_uris.extend([track['uri'] for track in album_tracks['items']])
                 except Exception as e:
-                    self.logger.warning(f"Error processing track {track.get('artist')} - {track.get('album')}: {e}")
-                    continue
+                    self.logger.warning(f"Error processing item {item}: {str(e)}")
             
             if track_uris:
-                # Add tracks to playlist in batches
-                for i in range(0, len(track_uris), batch_size):
-                    batch = track_uris[i:i + batch_size]
-                    await self.playlist_manager.add_tracks(playlist_id, batch)
-                    self.logger.info(f"Added {min(i + batch_size, len(track_uris))}/{len(track_uris)} tracks to playlist")
+                # Add tracks in batches of 100 (Spotify API limit)
+                for i in range(0, len(track_uris), 100):
+                    batch = track_uris[i:i + 100]
+                    spotify.playlist_add_items(playlist['id'], batch)
+                
+                self.logger.info(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
+                return playlist['id']
             else:
-                self.logger.warning("No valid tracks found to add to playlist")
+                raise ValueError("No valid tracks found in items")
             
-            return playlist_id
         except Exception as e:
-            self.logger.error(f"Error creating playlist: {e}")
+            self.logger.error(f"Error creating playlist: {str(e)}")
             raise
 
 async def main():
@@ -1266,7 +1084,7 @@ async def main():
                         tracks = json.load(f)
 
                     playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-                    await scraper.create_playlist(tracks, playlist_name)
+                    await scraper.create_playlist(json_file, playlist_name)
                     user_message("Playlist created successfully!")
 
                 elif choice == "4":
