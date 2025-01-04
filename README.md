@@ -1,36 +1,35 @@
 # SpotScrape
 
-A Python tool for scraping music information from web pages and creating Spotify playlists.
+SpotScrape is a powerful tool that helps you discover and collect Spotify tracks from web pages. It can either scan for direct Spotify links or use GPT to analyze the content and find music references.
 
 ## Features
 
-- Scan webpages for Spotify album links
-- Extract artist and album information from music-related content
-- Create Spotify playlists from extracted data
-- Efficient caching and rate limiting
-- Asynchronous operations for better performance
+- Scan web pages for Spotify track links
+- Use GPT to analyze web content and identify music references
+- Create Spotify playlists from discovered tracks
+- Web interface for easy interaction
+- Real-time progress updates
+- Command-line interface for automation
 
 ## Prerequisites
 
 - Python 3.8 or higher
 - Spotify Developer Account
-- OpenAI API Key
+- OpenAI API Key (for GPT scanning)
+- Modern web browser (for web interface)
 
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/spotscrape.git
+git clone https://github.com/88dreams/spotscrape.git
 cd spotscrape
 ```
 
 2. Create and activate a virtual environment:
 ```bash
 python -m venv venv
-# On Windows:
-.\venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
 3. Install dependencies:
@@ -45,45 +44,81 @@ playwright install
 
 ## Configuration
 
-1. Create a `.env` file in the project root:
-```env
-SPOTIPY_CLIENT_ID=your_spotify_client_id
-SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
-SPOTIPY_REDIRECT_URI=your_spotify_redirect_uri
-OPENAI_API_KEY=your_openai_api_key
+1. Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
 ```
 
-2. Replace the placeholder values with your actual API credentials:
-   - Get Spotify credentials from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-   - Get OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Edit `.env` with your credentials:
+```
+# Spotify API Credentials
+SPOTIPY_CLIENT_ID=your_spotify_client_id_here
+SPOTIPY_CLIENT_SECRET=your_spotify_client_secret_here
+SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
+
+# OpenAI API Key
+OPENAI_API_KEY=your_openai_api_key_here
+```
 
 ## Usage
 
-Run the script:
+### Web Interface
+
+1. Start the web server:
+```bash
+cd web
+python app.py
+```
+
+2. Open your browser and navigate to `http://localhost:5000`
+
+3. Use the web interface to:
+   - Scan web pages for Spotify tracks
+   - View real-time scanning progress
+   - Create playlists from scanned tracks
+   - Manage your JSON files
+
+### Command Line Interface
+
+For command-line usage, run:
 ```bash
 python spotscrape.py
 ```
 
-Choose from the following options:
-1. Scan webpage for Spotify links
-2. Scan webpage for music content
-3. Create Spotify playlist from JSON
-4. Exit
+Follow the interactive prompts to:
+1. Choose scanning method (URL or GPT)
+2. Enter the webpage URL
+3. Create a playlist (optional)
 
 ## Development
 
-- Main branch: Production-ready code
-- Development branch: Work in progress features
+1. Create a new feature branch:
+```bash
+git checkout -b feature/your-feature-name
+```
+
+2. Make your changes and commit:
+```bash
+git add .
+git commit -m "Description of your changes"
+```
+
+3. Push to GitHub:
+```bash
+git push origin feature/your-feature-name
+```
+
+4. Create a Pull Request to merge into the development branch
 
 ## License
 
-MIT License
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+2. Create your feature branch
+3. Commit your changes
+4. Push to your fork
+5. Submit a Pull Request
    
