@@ -1,0 +1,10 @@
+{
+    "spotify": {
+        "client_id": "your_spotify_client_id_here",
+        "client_secret": "your_spotify_client_secret_here",
+        "redirect_uri": "http://localhost:8888/callback"
+    },
+    "openai": {
+        "api_key": "your_openai_api_key_here"
+    }
+} 
