@@ -1,48 +1,28 @@
-# Environment variables
-.env
+# Python virtual environment
+virtual/
+venv/
+env/
 
-# Configuration
-config.json
-
-# Python
+# Cache files
+.cache/
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual Environment
-venv/
-ENV/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
+# Data directories
+JSON/
 logfiles/
-*.log
 
-# Cache
-.cache/
-.pytest_cache/
+# Environment variables
+.env
 
-# Project specific
-music_data.json 
+# Configuration files
+config.json
+
+# IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db 

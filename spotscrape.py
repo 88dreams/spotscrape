@@ -10,7 +10,7 @@ from functools import wraps
 from typing import List, Any, Optional, Generator, Tuple, Dict
 import requests
 from bs4 import BeautifulSoup
-from openai import OpenAI
+from openai import AsyncOpenAI
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from playwright.async_api import async_playwright
@@ -62,13 +62,17 @@ class ClientManager:
             return cls._spotify_instance
 
     @classmethod
-    def get_openai(cls):
+    async def get_openai(cls):
         """Get or create OpenAI client"""
-        if cls._openai_instance is None:
-            cls._openai_instance = OpenAI(
-                api_key=os.getenv('OPENAI_API_KEY')
-            )
-        return cls._openai_instance
+        async with cls._lock:
+            if cls._openai_instance is None:
+                cls._openai_instance = AsyncOpenAI(
+                    api_key=os.getenv('OPENAI_API_KEY'),
+                    timeout=30.0,
+                    max_retries=3,
+                    _strict_response_validation=False
+                )
+            return cls._openai_instance
 
     @classmethod
     async def get_session(cls) -> aiohttp.ClientSession:
@@ -511,7 +515,7 @@ async def process_with_gpt(content: str) -> str:
         cleaned_content = clean_html_content(content)
         logger.debug(f"Cleaned content sample: {cleaned_content[:500]}")
         
-        openai_client = ClientManager.get_openai()
+        openai_client = await ClientManager.get_openai()
         chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
         all_results = []
         
@@ -541,7 +545,7 @@ async def process_with_gpt(content: str) -> str:
                     {"role": "user", "content": f"Extract artist-album pairs from this text. Ignore any non-music content:\n\n{chunk}"}
                 ]
                 
-                response = openai_client.chat.completions.create(
+                response = await openai_client.chat.completions.create(
                     model="gpt-4",
                     messages=messages,
                     temperature=0.1,
@@ -598,11 +602,6 @@ class ContentProcessor:
             # Process with GPT
             gpt_results = await process_with_gpt(content)
             
-            # Load existing data
-            existing_data = await self._file_handler.load()
-            if not isinstance(existing_data, list):
-                existing_data = []
-            
             new_entries = []
             
             # Process each result
@@ -621,17 +620,17 @@ class ContentProcessor:
                             "Spotify Link": f"spotify:album:{album_id}",
                             "Extraction Date": datetime.now().isoformat()
                         })
+                        user_message(f"Found: {artist.strip()} - {album.strip()}")
                         
                 except ValueError as e:
                     logger.warning(f"Error processing line '{line}': {e}")
                     continue
             
-            # Save results if we have new entries
+            # Review and save results if we have new entries
             if new_entries:
-                await self._file_handler.save(new_entries)
-                user_message(f"Added {len(new_entries)} new entries to {destination_file}")
+                await review_and_save_results(new_entries, destination_file)
             else:
-                user_message("No new entries found to add")
+                user_message("No entries found to save")
                 
         except Exception as e:
             logger.error(f"Error processing URL {url}: {e}")
@@ -689,61 +688,89 @@ class PlaywrightCrawler:
                 logger.error(f"Error processing URL {url}: {e}")
                 raise
 
-async def scan_webpage(url: str, destination_file: str):
-    """Scan webpage and process content"""
-    async with ContentProcessor() as processor:
-        await processor.process_url(url, destination_file)
+async def review_and_save_results(entries: List[Dict], destination_file: str) -> List[Dict]:
+    """Review and optionally modify the scan results before saving"""
+    if not entries:
+        user_message("No entries found to review")
+        return []
 
-async def create_playlist(json_file: str, playlist_name: str = None):
-    """Create a Spotify playlist from JSON file"""
-    if not playlist_name:
-        playlist_name = f"SpotScraper Playlist {datetime.now().strftime('%Y-%m-%d')}"
+    while True:
+        user_message("\nFound the following Artist - Album combinations:")
+        for i, entry in enumerate(entries, 1):
+            user_message(f"{i}. {entry['Artist']} - {entry['Album']}")
 
-    playlist_manager = PlaylistManager()
-    file_handler = FileHandler(json_file)
-    
-    try:
-        data = await file_handler.load()
-        if not data:
-            user_message("No data found in JSON file")
-            return
-
-        playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
-
-        playlist_id = await playlist_manager.create_playlist(
-            name=playlist_name,
-            description=playlist_description or f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
-        )
-
-        track_uris = []
-        spotify = await ClientManager.get_spotify()
+        user_message("\nWhat would you like to do?")
+        user_message("1. Save all entries")
+        user_message("2. Delete specific albums")
+        user_message("3. Back to Main Menu")
         
-        for entry in data:
-            if spotify_link := entry.get('Spotify Link'):
-                if 'spotify:album:' in spotify_link:
-                    album_id = spotify_link.split(':')[-1]
-                    album_tracks = spotify.album_tracks(album_id)
-                    track_uris.extend(track['uri'] for track in album_tracks['items'])
+        choice = input("\nEnter your choice (1-3): ").strip()
 
-        track_uris = list(set(track_uris))
+        if choice == "1":
+            # Save all entries
+            file_handler = FileHandler(destination_file)
+            await file_handler.save(entries)
+            user_message(f"\nSaved {len(entries)} entries to {destination_file}")
+            
+            # Ask about creating playlist
+            user_message("\nWould you like to create a Spotify playlist with these entries now?")
+            user_message("1. Yes")
+            user_message("2. No")
+            
+            playlist_choice = input("\nEnter your choice (1-2): ").strip()
+            if playlist_choice == "1":
+                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
+                await create_playlist(destination_file, playlist_name)
+            
+            return entries
 
-        if track_uris:
-            await playlist_manager.add_tracks(playlist_id, track_uris)
-            user_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
+        elif choice == "2":
+            # Delete specific albums
+            while True:
+                user_message("\nEnter the numbers of albums to delete (comma-separated, or 0 to finish):")
+                for i, entry in enumerate(entries, 1):
+                    user_message(f"{i}. {entry['Artist']} - {entry['Album']}")
+                
+                try:
+                    delete_input = input("\nEnter numbers (0 to finish): ").strip()
+                    if delete_input == "0":
+                        break
+                    
+                    # Parse comma-separated numbers
+                    delete_nums = [int(num.strip()) for num in delete_input.split(",")]
+                    # Sort in reverse order to avoid index shifting when deleting
+                    delete_nums.sort(reverse=True)
+                    
+                    deleted_count = 0
+                    for delete_num in delete_nums:
+                        if 1 <= delete_num <= len(entries):
+                            deleted = entries.pop(delete_num - 1)
+                            user_message(f"Deleted: {deleted['Artist']} - {deleted['Album']}")
+                            deleted_count += 1
+                        else:
+                            user_message(f"Invalid number: {delete_num}")
+                    
+                    if deleted_count > 0:
+                        user_message(f"\nDeleted {deleted_count} entries")
+                    
+                except ValueError:
+                    user_message("Please enter valid numbers separated by commas")
+                
+                if not entries:
+                    user_message("No entries left to review")
+                    return []
+
+        elif choice == "3":
+            # Back to main menu without saving
+            return []
+
         else:
-            user_message("No tracks found to add to playlist")
-
-    except Exception as e:
-        logger.error(f"Error creating playlist: {e}")
-        raise
+            user_message("Invalid choice. Please enter 1-3.")
 
 async def scan_spotify_links(url: str, destination_file: str) -> None:
     """Scan webpage for Spotify links and add artist and album data to JSON"""
     extractor = WebContentExtractor()
     try:
-        # Initialize file handler
-        file_handler = FileHandler(destination_file)
-
         # Extract content
         content = await extractor.extract_content(url)
         
@@ -801,10 +828,8 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
                 logger.warning(f"Error processing album ID {album_id}: {e}")
                 continue
 
-        # Save results, overwriting any existing data
         if new_entries:
-            await file_handler.save(new_entries)  # Save only new entries, overwriting existing file
-            user_message(f"Saved {len(new_entries)} entries to {destination_file}")
+            await review_and_save_results(new_entries, destination_file)
         else:
             user_message("No entries found to save")
 
@@ -814,6 +839,54 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
     finally:
         # Ensure Playwright resources are cleaned up
         await extractor.cleanup()
+
+async def scan_webpage(url: str, destination_file: str):
+    """Scan webpage and process content"""
+    async with ContentProcessor() as processor:
+        await processor.process_url(url, destination_file)
+
+async def create_playlist(json_file: str, playlist_name: str = None):
+    """Create a Spotify playlist from JSON file"""
+    if not playlist_name:
+        playlist_name = f"SpotScraper Playlist {datetime.now().strftime('%Y-%m-%d')}"
+
+    playlist_manager = PlaylistManager()
+    file_handler = FileHandler(json_file)
+    
+    try:
+        data = await file_handler.load()
+        if not data:
+            user_message("No data found in JSON file")
+            return
+
+        playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
+
+        playlist_id = await playlist_manager.create_playlist(
+            name=playlist_name,
+            description=playlist_description or f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
+        )
+
+        track_uris = []
+        spotify = await ClientManager.get_spotify()
+        
+        for entry in data:
+            if spotify_link := entry.get('Spotify Link'):
+                if 'spotify:album:' in spotify_link:
+                    album_id = spotify_link.split(':')[-1]
+                    album_tracks = spotify.album_tracks(album_id)
+                    track_uris.extend(track['uri'] for track in album_tracks['items'])
+
+        track_uris = list(set(track_uris))
+
+        if track_uris:
+            await playlist_manager.add_tracks(playlist_id, track_uris)
+            user_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
+        else:
+            user_message("No tracks found to add to playlist")
+
+    except Exception as e:
+        logger.error(f"Error creating playlist: {e}")
+        raise
 
 async def main():
     """Main application entry point with improved error handling and user interaction"""
@@ -831,6 +904,10 @@ async def main():
             user_message(f"Missing required environment variables: {', '.join(missing_vars)}")
             return
 
+        # Create JSON directory if it doesn't exist
+        json_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON"))
+        os.makedirs(json_dir, exist_ok=True)
+
         while True:
             user_message("\nSpotScraper Menu:")
             user_message("1. Scan webpage for Spotify links")
@@ -846,13 +923,7 @@ async def main():
                     user_message("No URL provided")
                     continue
 
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
+                default_path = os.path.normpath(os.path.join(json_dir, "spotscrape_url.json"))
                 
                 user_message("\nWhere would you like to save the results?")
                 user_message(f"1. Default location ({default_path})")
@@ -879,13 +950,7 @@ async def main():
                     user_message("No URL provided")
                     continue
 
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
+                default_path = os.path.normpath(os.path.join(json_dir, "spotscrape_gpt.json"))
                 
                 user_message("\nWhere would you like to save the results?")
                 user_message(f"1. Default location ({default_path})")
@@ -907,25 +972,24 @@ async def main():
                 user_message("Scan complete!")
 
             elif choice == "3":
-                # Fix path handling for Windows
-                default_path = os.path.normpath(os.path.join(
-                    os.path.expanduser('~'),
-                    'Music',
-                    'SpotScraper_data',
-                    'music_data.json'
-                ))
+                # Show both default files as options
+                url_default = os.path.normpath(os.path.join(json_dir, "spotscrape_url.json"))
+                gpt_default = os.path.normpath(os.path.join(json_dir, "spotscrape_gpt.json"))
                 
                 user_message("\nEnter the path to your JSON file:")
-                user_message(f"1. Default location ({default_path})")
-                user_message("2. Custom location")
+                user_message(f"1. URL scan results ({url_default})")
+                user_message(f"2. GPT scan results ({gpt_default})")
+                user_message("3. Custom location")
                 
-                file_choice = input("Choose (1-2): ").strip()
+                file_choice = input("Choose (1-3): ").strip()
                 
-                if file_choice == "2":
+                if file_choice == "1":
+                    json_file = url_default
+                elif file_choice == "2":
+                    json_file = gpt_default
+                else:
                     json_file = input("Enter full path to JSON file: ").strip()
                     json_file = os.path.normpath(os.path.expanduser(json_file))
-                else:
-                    json_file = default_path
 
                 if not os.path.exists(json_file):
                     user_message(f"File not found: {json_file}")
