@@ -688,84 +688,41 @@ class PlaywrightCrawler:
                 logger.error(f"Error processing URL {url}: {e}")
                 raise
 
-async def review_and_save_results(entries: List[Dict], destination_file: str) -> List[Dict]:
-    """Review and optionally modify the scan results before saving"""
-    if not entries:
-        user_message("No entries found to review")
-        return []
-
+async def review_and_save_results(entries: List[Dict], destination_file: str) -> None:
+    """Review and optionally edit results before saving"""
     while True:
-        user_message("\nFound the following Artist - Album combinations:")
+        user_message("\nFound albums:")
         for i, entry in enumerate(entries, 1):
             user_message(f"{i}. {entry['Artist']} - {entry['Album']}")
-
-        user_message("\nWhat would you like to do?")
-        user_message("1. Save all entries")
-        user_message("2. Delete specific albums")
-        user_message("3. Back to Main Menu")
         
-        choice = input("\nEnter your choice (1-3): ").strip()
-
+        user_message("\nWhat would you like to do?")
+        user_message("1. Save all")
+        user_message("2. Delete an entry")
+        user_message("3. Cancel")
+        
+        choice = input("Choose (1-3): ").strip()
+        
         if choice == "1":
-            # Save all entries
             file_handler = FileHandler(destination_file)
             await file_handler.save(entries)
-            user_message(f"\nSaved {len(entries)} entries to {destination_file}")
-            
-            # Ask about creating playlist
-            user_message("\nWould you like to create a Spotify playlist with these entries now?")
-            user_message("1. Yes")
-            user_message("2. No")
-            
-            playlist_choice = input("\nEnter your choice (1-2): ").strip()
-            if playlist_choice == "1":
-                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-                await create_playlist(destination_file, playlist_name)
-            
-            return entries
-
+            user_message(f"Saved {len(entries)} entries to {destination_file}")
+            break
         elif choice == "2":
-            # Delete specific albums
-            while True:
-                user_message("\nEnter the numbers of albums to delete (comma-separated, or 0 to finish):")
-                for i, entry in enumerate(entries, 1):
-                    user_message(f"{i}. {entry['Artist']} - {entry['Album']}")
-                
-                try:
-                    delete_input = input("\nEnter numbers (0 to finish): ").strip()
-                    if delete_input == "0":
-                        break
-                    
-                    # Parse comma-separated numbers
-                    delete_nums = [int(num.strip()) for num in delete_input.split(",")]
-                    # Sort in reverse order to avoid index shifting when deleting
-                    delete_nums.sort(reverse=True)
-                    
-                    deleted_count = 0
-                    for delete_num in delete_nums:
-                        if 1 <= delete_num <= len(entries):
-                            deleted = entries.pop(delete_num - 1)
-                            user_message(f"Deleted: {deleted['Artist']} - {deleted['Album']}")
-                            deleted_count += 1
-                        else:
-                            user_message(f"Invalid number: {delete_num}")
-                    
-                    if deleted_count > 0:
-                        user_message(f"\nDeleted {deleted_count} entries")
-                    
-                except ValueError:
-                    user_message("Please enter valid numbers separated by commas")
-                
-                if not entries:
-                    user_message("No entries left to review")
-                    return []
-
+            entry_num = input("Enter the number of the entry to delete: ").strip()
+            try:
+                idx = int(entry_num) - 1
+                if 0 <= idx < len(entries):
+                    deleted = entries.pop(idx)
+                    user_message(f"Deleted: {deleted['Artist']} - {deleted['Album']}")
+                else:
+                    user_message("Invalid entry number")
+            except ValueError:
+                user_message("Please enter a valid number")
         elif choice == "3":
-            # Back to main menu without saving
-            return []
-
+            user_message("Operation cancelled")
+            return
         else:
-            user_message("Invalid choice. Please enter 1-3.")
+            user_message("Invalid choice")
 
 async def scan_spotify_links(url: str, destination_file: str) -> None:
     """Scan webpage for Spotify links and add artist and album data to JSON"""
@@ -852,8 +809,18 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
                 continue
 
         if new_entries:
-            await file_handler.save(new_entries)
-            user_message(f"Saved {len(new_entries)} entries to {destination_file}")
+            # Review and edit entries before saving
+            await review_and_save_results(new_entries, destination_file)
+            
+            # Ask if user wants to create a playlist
+            user_message("\nWould you like to create a Spotify playlist with these albums?")
+            user_message("1. Yes")
+            user_message("2. No")
+            choice = input("Choose (1-2): ").strip()
+            
+            if choice == "1":
+                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
+                await create_playlist(destination_file, playlist_name)
         else:
             user_message("No entries found to save")
 
@@ -865,9 +832,32 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
         await extractor.cleanup()
 
 async def scan_webpage(url: str, destination_file: str):
-    """Scan webpage and process content"""
-    async with ContentProcessor() as processor:
+    """Scan webpage for music content and process with GPT"""
+    try:
+        processor = ContentProcessor()
         await processor.process_url(url, destination_file)
+        
+        # Load the results for review
+        file_handler = FileHandler(destination_file)
+        entries = await file_handler.load()
+        
+        if entries:
+            # Review and edit entries before proceeding
+            await review_and_save_results(entries, destination_file)
+            
+            # Ask if user wants to create a playlist
+            user_message("\nWould you like to create a Spotify playlist with these albums?")
+            user_message("1. Yes")
+            user_message("2. No")
+            choice = input("Choose (1-2): ").strip()
+            
+            if choice == "1":
+                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
+                await create_playlist(destination_file, playlist_name)
+            
+    except Exception as e:
+        logger.error(f"Error processing webpage: {e}")
+        raise
 
 async def create_playlist(json_file: str, playlist_name: str = None):
     """Create a Spotify playlist from JSON file"""
