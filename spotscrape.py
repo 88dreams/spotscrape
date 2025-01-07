@@ -771,6 +771,9 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
     """Scan webpage for Spotify links and add artist and album data to JSON"""
     extractor = WebContentExtractor()
     try:
+        # Initialize file handler
+        file_handler = FileHandler(destination_file)
+
         # Extract content
         content = await extractor.extract_content(url)
         
@@ -810,26 +813,47 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
         # Process each album ID
         for album_id in album_ids:
             try:
+                # Get album info
                 album_info = spotify.album(album_id)
                 artist = album_info['artists'][0]['name']
                 album = album_info['name']
+                album_popularity = album_info.get('popularity', 0)
+
+                # Get track info
+                tracks = []
+                track_results = spotify.album_tracks(album_id)
+                track_ids = [track['id'] for track in track_results['items']]
+                
+                # Get track details including popularity (in batches of 50)
+                for i in range(0, len(track_ids), 50):
+                    batch_ids = track_ids[i:i+50]
+                    batch_tracks = spotify.tracks(batch_ids)['tracks']
+                    for track in batch_tracks:
+                        if track:
+                            tracks.append({
+                                'name': track['name'],
+                                'popularity': track.get('popularity', 0)
+                            })
 
                 new_entry = {
                     "Artist": artist,
                     "Album": album,
+                    "Album Popularity": album_popularity,
+                    "Tracks": tracks,
                     "Spotify Link": f"spotify:album:{album_id}",
                     "Extraction Date": datetime.now().isoformat()
                 }
 
                 new_entries.append(new_entry)
-                user_message(f"Found: {artist} - {album}")
+                user_message(f"Found: {artist} - {album} (Popularity: {album_popularity})")
 
             except Exception as e:
                 logger.warning(f"Error processing album ID {album_id}: {e}")
                 continue
 
         if new_entries:
-            await review_and_save_results(new_entries, destination_file)
+            await file_handler.save(new_entries)
+            user_message(f"Saved {len(new_entries)} entries to {destination_file}")
         else:
             user_message("No entries found to save")
 
