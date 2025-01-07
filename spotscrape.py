@@ -819,8 +819,7 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
             choice = input("Choose (1-2): ").strip()
             
             if choice == "1":
-                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-                await create_playlist(destination_file, playlist_name)
+                await create_playlist(destination_file)
         else:
             user_message("No entries found to save")
 
@@ -852,8 +851,7 @@ async def scan_webpage(url: str, destination_file: str):
             choice = input("Choose (1-2): ").strip()
             
             if choice == "1":
-                playlist_name = input("\nEnter playlist name (or press Enter for default): ").strip()
-                await create_playlist(destination_file, playlist_name)
+                await create_playlist(destination_file)
             
     except Exception as e:
         logger.error(f"Error processing webpage: {e}")
@@ -861,9 +859,6 @@ async def scan_webpage(url: str, destination_file: str):
 
 async def create_playlist(json_file: str, playlist_name: str = None):
     """Create a Spotify playlist from JSON file"""
-    if not playlist_name:
-        playlist_name = f"SpotScraper Playlist {datetime.now().strftime('%Y-%m-%d')}"
-
     playlist_manager = PlaylistManager()
     file_handler = FileHandler(json_file)
     
@@ -873,11 +868,28 @@ async def create_playlist(json_file: str, playlist_name: str = None):
             user_message("No data found in JSON file")
             return
 
+        # Ask for playlist type first
+        user_message("\nWhat type of playlist would you like to create?")
+        user_message("1. All tracks from albums")
+        user_message("2. Most popular track from each album (Sampler)")
+        playlist_type = input("Choose (1-2): ").strip()
+
+        # Then ask for playlist name
+        if not playlist_name:
+            default_name = "SpotScraper Sampler" if playlist_type == "2" else "SpotScraper Playlist"
+            default_name += f" {datetime.now().strftime('%Y-%m-%d')}"
+            playlist_name = input(f"\nEnter playlist name (or press Enter for '{default_name}'): ").strip() or default_name
+
         playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
+        
+        # Modify description based on playlist type
+        default_description = f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
+        if playlist_type == "2":
+            default_description = f"Sampler playlist featuring the most popular track from each album - Created on {datetime.now().strftime('%Y-%m-%d')}"
 
         playlist_id = await playlist_manager.create_playlist(
             name=playlist_name,
-            description=playlist_description or f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
+            description=playlist_description or default_description
         )
 
         track_uris = []
@@ -888,13 +900,37 @@ async def create_playlist(json_file: str, playlist_name: str = None):
                 if 'spotify:album:' in spotify_link:
                     album_id = spotify_link.split(':')[-1]
                     album_tracks = spotify.album_tracks(album_id)
-                    track_uris.extend(track['uri'] for track in album_tracks['items'])
+                    
+                    if playlist_type == "2" and 'Tracks' in entry:
+                        # Find the most popular track in the album
+                        most_popular_track = None
+                        highest_popularity = -1
+                        
+                        # Get all tracks with their popularity scores
+                        tracks_with_popularity = []
+                        for track in album_tracks['items']:
+                            track_info = spotify.track(track['id'])
+                            popularity = track_info.get('popularity', 0)
+                            tracks_with_popularity.append((track, popularity))
+                            
+                            if popularity > highest_popularity:
+                                highest_popularity = popularity
+                                most_popular_track = track
+                        
+                        if most_popular_track:
+                            track_uris.append(most_popular_track['uri'])
+                            user_message(f"Added '{most_popular_track['name']}' (Popularity: {highest_popularity}) from {entry['Artist']} - {entry['Album']}")
+                    else:
+                        # Add all tracks from the album
+                        album_uris = [track['uri'] for track in album_tracks['items']]
+                        track_uris.extend(album_uris)
 
-        track_uris = list(set(track_uris))
+        track_uris = list(set(track_uris))  # Remove any duplicates
 
         if track_uris:
             await playlist_manager.add_tracks(playlist_id, track_uris)
-            user_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
+            playlist_type_str = "sampler" if playlist_type == "2" else "full"
+            user_message(f"Created {playlist_type_str} playlist '{playlist_name}' with {len(track_uris)} tracks")
         else:
             user_message("No tracks found to add to playlist")
 
