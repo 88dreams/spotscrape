@@ -862,7 +862,8 @@ async def scan_webpage(url: str, destination_file: str = None):
         # Process with GPT
         logger.debug("Processing content with GPT")
         gpt_results = await process_with_gpt(content)
-        logger.debug(f"GPT processing complete, found {len(gpt_results.split('\n'))} potential entries")
+        entries_count = len(gpt_results.split('\n'))
+        logger.debug(f"GPT processing complete, found {entries_count} potential entries")
         
         # Parse GPT results into artist-album pairs
         entries = []
