@@ -765,12 +765,23 @@ async def scan_spotify_links(url: str, destination_file: str = None):
         # Initialize file handler
         file_handler = FileHandler(destination_file)
 
+        # Get scan timestamp
+        scan_time = datetime.now().isoformat()
+        logger.debug(f"Starting scan at: {scan_time}")
+
         # Extract content
+        logger.debug(f"Extracting content from URL: {url}")
         content = await extractor.extract_content(url)
+        logger.debug(f"Content extracted, length: {len(content)} characters")
         
-        # Log a sample of the content for debugging
-        content_sample = content[:1000]
-        logger.debug(f"Content sample: {content_sample}")
+        # Clean HTML content
+        logger.debug("Cleaning HTML content")
+        cleaned_content = clean_html_content(content)
+        logger.debug(f"Content cleaned, length: {len(cleaned_content)} characters")
+        
+        # Log a sample of the cleaned content for debugging
+        content_sample = cleaned_content[:1000]
+        logger.debug(f"Cleaned content sample: {content_sample}")
         
         # Enhanced regex pattern to capture various Spotify album link formats
         spotify_patterns = [
@@ -808,7 +819,9 @@ async def scan_spotify_links(url: str, destination_file: str = None):
                     'Album ID': album_id,
                     'Artist': album_info['artists'][0]['name'],
                     'Album': album_info['name'],
-                    'Album Popularity': album_info.get('popularity', 0)
+                    'Album Popularity': album_info.get('popularity', 0),
+                    'Spotify Link': f"spotify:album:{album_id}",
+                    'Scan Time': scan_time
                 }
                 entries.append(entry)
             except Exception as e:
@@ -832,118 +845,212 @@ async def scan_spotify_links(url: str, destination_file: str = None):
 async def scan_webpage(url: str, destination_file: str = None):
     """Scan webpage using GPT to extract artist and album data"""
     try:
-        # ... existing code ...
+        # Initialize components
+        logger.debug("Initializing components for GPT scan")
+        extractor = WebContentExtractor()
+        spotify = await ClientManager.get_spotify()
         
-        # Process the response
+        # Get scan timestamp
+        scan_time = datetime.now().isoformat()
+        logger.debug(f"Starting scan at: {scan_time}")
+        
+        # Extract content
+        logger.debug(f"Extracting content from URL: {url}")
+        content = await extractor.extract_content(url)
+        logger.debug(f"Content extracted, length: {len(content)} characters")
+        
+        # Process with GPT
+        logger.debug("Processing content with GPT")
+        gpt_results = await process_with_gpt(content)
+        logger.debug(f"GPT processing complete, found {len(gpt_results.split('\n'))} potential entries")
+        
+        # Parse GPT results into artist-album pairs
         entries = []
-        for item in response:
+        logger.debug("Starting to process artist-album pairs")
+        for line in gpt_results.split('\n'):
+            if ' - ' not in line:
+                continue
+                
             try:
+                artist, album = line.split(' - ', 1)
+                artist = artist.strip()
+                album = album.strip()
+                logger.debug(f"Processing artist-album pair: {artist} - {album}")
+                
                 # Search for album
-                results = spotify.search(q=f"artist:{item['artist']} album:{item['album']}", type='album', limit=1)
+                search_query = f"artist:{artist} album:{album}"
+                logger.debug(f"Searching Spotify with query: {search_query}")
+                results = spotify.search(q=search_query, type='album', limit=1)
                 
                 if results['albums']['items']:
                     album = results['albums']['items'][0]
+                    album_id = album['id']
+                    logger.debug(f"Found Spotify album ID: {album_id}")
+                    
                     entry = {
-                        'Album ID': album['id'],
+                        'Album ID': album_id,
                         'Artist': album['artists'][0]['name'],
                         'Album': album['name'],
-                        'Album Popularity': album.get('popularity', 0)
+                        'Album Popularity': album.get('popularity', 0),
+                        'Spotify Link': f"spotify:album:{album_id}",
+                        'Scan Time': scan_time
                     }
                     entries.append(entry)
+                    logger.debug(f"Added entry for {entry['Artist']} - {entry['Album']}")
+                else:
+                    logger.warning(f"No Spotify match found for: {artist} - {album}")
             except Exception as e:
-                logger.error(f"Error processing album {item}: {str(e)}")
+                logger.error(f"Error processing album {line}: {str(e)}", exc_info=True)
                 continue
         
-        # Automatically save results without prompting
-        if destination_file:
+        # Save results
+        if destination_file and entries:
+            logger.debug(f"Saving {len(entries)} entries to {destination_file}")
             with open(destination_file, 'w') as f:
                 json.dump(entries, f, indent=4)
+            logger.debug("File save complete")
         
+        logger.debug(f"Scan complete, found {len(entries)} albums")
         return entries
         
     except Exception as e:
-        logger.error(f"Error in scan_webpage: {str(e)}")
+        logger.error(f"Error in scan_webpage: {str(e)}", exc_info=True)
         raise
+    finally:
+        # Ensure Playwright resources are cleaned up
+        await extractor.cleanup()
 
 async def create_playlist(json_file: str, playlist_name: str = None):
     """Create a Spotify playlist from JSON file"""
+    logger.debug(f"Starting playlist creation from file: {json_file}")
     playlist_manager = PlaylistManager()
     file_handler = FileHandler(json_file)
     
     try:
+        # Load and validate JSON data
         data = await file_handler.load()
+        logger.debug(f"Loaded {len(data) if data else 0} entries from JSON file")
         if not data:
             user_message("No data found in JSON file")
             return
 
-        # Ask for playlist type first
+        # Get playlist type
         user_message("\nWhat type of playlist would you like to create?")
         user_message("1. All tracks from albums")
         user_message("2. Most popular track from each album (Sampler)")
         playlist_type = input("Choose (1-2): ").strip()
+        is_sampler = playlist_type == "2"
+        logger.debug(f"User selected playlist type: {'sampler' if is_sampler else 'full'}")
 
-        # Then ask for playlist name
+        # Get playlist name
         if not playlist_name:
-            default_name = "SpotScraper Sampler" if playlist_type == "2" else "SpotScraper Playlist"
+            default_name = "SpotScraper Sampler" if is_sampler else "SpotScraper Playlist"
             default_name += f" {datetime.now().strftime('%Y-%m-%d')}"
             playlist_name = input(f"\nEnter playlist name (or press Enter for '{default_name}'): ").strip() or default_name
+        logger.debug(f"Using playlist name: {playlist_name}")
 
+        # Get playlist description
         playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
-        
-        # Modify description based on playlist type
-        default_description = f"{playlist_name} - Created on {datetime.now().strftime('%Y-%m-%d')}"
-        if playlist_type == "2":
-            default_description = f"Sampler playlist featuring the most popular track from each album - Created on {datetime.now().strftime('%Y-%m-%d')}"
+        default_description = (f"Sampler playlist featuring the most popular track from each album" if is_sampler else f"{playlist_name}") + f" - Created on {datetime.now().strftime('%Y-%m-%d')}"
+        description = playlist_description or default_description
+        logger.debug(f"Using playlist description: {description}")
 
-        playlist_id = await playlist_manager.create_playlist(
-            name=playlist_name,
-            description=playlist_description or default_description
-        )
-
-        track_uris = []
+        # Create playlist
         spotify = await ClientManager.get_spotify()
-        
+        user_id = spotify.current_user()['id']
+        playlist = spotify.user_playlist_create(
+            user=user_id,
+            name=playlist_name,
+            public=True,
+            description=description
+        )
+        playlist_id = playlist['id']
+        logger.debug(f"Created playlist with ID: {playlist_id}")
+
+        # Process albums and collect tracks
+        track_uris = []
         for entry in data:
-            if spotify_link := entry.get('Spotify Link'):
-                if 'spotify:album:' in spotify_link:
-                    album_id = spotify_link.split(':')[-1]
+            try:
+                logger.debug(f"Processing entry: {entry.get('Artist', 'Unknown')} - {entry.get('Album', 'Unknown')}")
+                
+                # Get album ID from Spotify Link or Album ID
+                album_id = None
+                if spotify_link := entry.get('Spotify Link'):
+                    if 'spotify:album:' in spotify_link:
+                        album_id = spotify_link.split(':')[-1]
+                elif entry_id := entry.get('Album ID'):
+                    album_id = entry_id
+                
+                if not album_id:
+                    logger.warning(f"No valid album ID found for entry: {entry}")
+                    continue
+                
+                logger.debug(f"Processing album ID: {album_id}")
+                
+                # Get album tracks
+                try:
                     album_tracks = spotify.album_tracks(album_id)
+                    logger.debug(f"Found {len(album_tracks['items'])} tracks in album")
+                except Exception as e:
+                    logger.error(f"Error getting tracks for album {album_id}: {str(e)}")
+                    continue
+                
+                if is_sampler:
+                    # Find most popular track
+                    most_popular = None
+                    highest_popularity = -1
                     
-                    if playlist_type == "2" and 'Tracks' in entry:
-                        # Find the most popular track in the album
-                        most_popular_track = None
-                        highest_popularity = -1
-                        
-                        # Get all tracks with their popularity scores
-                        tracks_with_popularity = []
-                        for track in album_tracks['items']:
+                    for track in album_tracks['items']:
+                        try:
                             track_info = spotify.track(track['id'])
                             popularity = track_info.get('popularity', 0)
-                            tracks_with_popularity.append((track, popularity))
+                            logger.debug(f"Track: {track['name']}, Popularity: {popularity}")
                             
                             if popularity > highest_popularity:
                                 highest_popularity = popularity
-                                most_popular_track = track
-                        
-                        if most_popular_track:
-                            track_uris.append(most_popular_track['uri'])
-                            user_message(f"Added '{most_popular_track['name']}' (Popularity: {highest_popularity}) from {entry['Artist']} - {entry['Album']}")
-                    else:
-                        # Add all tracks from the album
-                        album_uris = [track['uri'] for track in album_tracks['items']]
-                        track_uris.extend(album_uris)
+                                most_popular = track
+                        except Exception as e:
+                            logger.error(f"Error getting track info for {track['id']}: {str(e)}")
+                            continue
+                    
+                    if most_popular:
+                        track_uris.append(most_popular['uri'])
+                        logger.debug(f"Added most popular track: {most_popular['name']} (Popularity: {highest_popularity})")
+                else:
+                    # Add all tracks
+                    album_track_uris = [track['uri'] for track in album_tracks['items']]
+                    track_uris.extend(album_track_uris)
+                    logger.debug(f"Added {len(album_track_uris)} tracks from album")
+            
+            except Exception as e:
+                logger.error(f"Error processing entry {entry}: {str(e)}", exc_info=True)
+                continue
 
-        track_uris = list(set(track_uris))  # Remove any duplicates
+        # Add tracks to playlist
+        unique_track_uris = list(set(track_uris))  # Remove duplicates
+        logger.debug(f"Total unique tracks to add: {len(unique_track_uris)}")
 
-        if track_uris:
-            await playlist_manager.add_tracks(playlist_id, track_uris)
-            playlist_type_str = "sampler" if playlist_type == "2" else "full"
-            user_message(f"Created {playlist_type_str} playlist '{playlist_name}' with {len(track_uris)} tracks")
+        if unique_track_uris:
+            logger.debug("Starting to add tracks to playlist")
+            # Add tracks in batches of 100
+            for i in range(0, len(unique_track_uris), 100):
+                batch = unique_track_uris[i:i+100]
+                try:
+                    spotify.playlist_add_items(playlist_id, batch)
+                    logger.debug(f"Added batch of {len(batch)} tracks to playlist")
+                except Exception as e:
+                    logger.error(f"Error adding batch to playlist: {str(e)}")
+                    continue
+            
+            playlist_type_str = "sampler" if is_sampler else "full"
+            user_message(f"Created {playlist_type_str} playlist '{playlist_name}' with {len(unique_track_uris)} tracks")
+            logger.debug("Playlist creation complete")
         else:
+            logger.warning("No tracks found to add to playlist")
             user_message("No tracks found to add to playlist")
 
     except Exception as e:
-        logger.error(f"Error creating playlist: {e}")
+        logger.error(f"Error creating playlist: {e}", exc_info=True)
         raise
 
 async def main():

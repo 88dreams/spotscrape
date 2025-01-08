@@ -212,12 +212,22 @@ def scan_gpt():
                 if os.path.exists(destination_file):
                     with open(destination_file, 'r') as f:
                         albums_data = json.load(f)
+                        # Format albums for frontend display
+                        formatted_albums = []
+                        for album in albums_data:
+                            formatted_albums.append({
+                                'id': album.get('Album ID', ''),
+                                'artist': album.get('Artist', ''),
+                                'name': album.get('Album', ''),
+                                'popularity': album.get('Album Popularity', 0)
+                            })
                         scan_results['gpt'] = {
                             'status': 'complete',
-                            'albums': albums_data,
+                            'albums': formatted_albums,
                             'error': None
                         }
-                        debug_logger.debug(f"Loaded {len(albums_data)} albums from file")
+                        debug_logger.debug(f"Loaded {len(formatted_albums)} albums from file")
+                        gui_message(f"Found {len(formatted_albums)} albums")
                 else:
                     scan_results['gpt'] = {
                         'status': 'error',
@@ -290,31 +300,53 @@ def create_new_playlist():
                 track_uris = []
                 for album_id in album_ids:
                     try:
+                        # Extract album ID from full Spotify URL if needed
+                        if 'spotify.com' in album_id:
+                            album_id = album_id.split('/')[-1].split('?')[0]
+                        debug_logger.debug(f"Processing album ID: {album_id}")
+                        
                         album_tracks = spotify.album_tracks(album_id)
                         if include_popular_tracks:
+                            debug_logger.debug(f"Finding most popular track for album {album_id}")
                             # Find most popular track
                             most_popular = None
                             highest_popularity = -1
                             for track in album_tracks['items']:
                                 track_info = spotify.track(track['id'])
                                 popularity = track_info.get('popularity', 0)
+                                debug_logger.debug(f"Track {track['name']} popularity: {popularity}")
                                 if popularity > highest_popularity:
                                     highest_popularity = popularity
                                     most_popular = track
                             if most_popular:
                                 track_uris.append(most_popular['uri'])
-                        else:
+                                debug_logger.debug(f"Added popular track: {most_popular['name']} (popularity: {highest_popularity}) from album {album_id}")
+                        elif include_all_tracks:
                             # Add all tracks
-                            track_uris.extend([track['uri'] for track in album_tracks['items']])
+                            album_track_uris = [track['uri'] for track in album_tracks['items']]
+                            track_uris.extend(album_track_uris)
+                            debug_logger.debug(f"Added {len(album_track_uris)} tracks from album {album_id}")
+                        else:
+                            # Default to all tracks if neither option is selected
+                            album_track_uris = [track['uri'] for track in album_tracks['items']]
+                            track_uris.extend(album_track_uris)
+                            debug_logger.debug(f"Added {len(album_track_uris)} tracks (default) from album {album_id}")
                     except Exception as e:
-                        debug_logger.error(f"Error processing album {album_id}: {e}")
+                        debug_logger.error(f"Error processing album {album_id}: {str(e)}", exc_info=True)
                         continue
                 
+                debug_logger.debug(f"Total tracks collected: {len(track_uris)}")
                 # Add tracks in batches of 100
                 if track_uris:
-                    for i in range(0, len(track_uris), 100):
-                        batch = track_uris[i:i+100]
-                        spotify.playlist_add_items(playlist['id'], batch)
+                    try:
+                        for i in range(0, len(track_uris), 100):
+                            batch = track_uris[i:i+100]
+                            debug_logger.debug(f"Adding batch of {len(batch)} tracks to playlist")
+                            spotify.playlist_add_items(playlist['id'], batch)
+                            debug_logger.debug(f"Successfully added batch to playlist")
+                    except Exception as e:
+                        debug_logger.error(f"Error adding tracks to playlist: {str(e)}", exc_info=True)
+                        raise
                 
                 gui_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
                 debug_logger.debug("Playlist creation completed successfully")
@@ -407,4 +439,5 @@ if __name__ == '__main__':
         
     except Exception as e:
         debug_logger.error(f"Fatal error in main: {str(e)}", exc_info=True)
+        sys.exit(1) 
         sys.exit(1) 
