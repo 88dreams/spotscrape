@@ -603,6 +603,7 @@ class ContentProcessor:
             gpt_results = await process_with_gpt(content)
             
             new_entries = []
+            user_message("\nProcessing found albums...")
             
             # Process each result
             for line in gpt_results.split('\n'):
@@ -614,13 +615,35 @@ class ContentProcessor:
                     album_id = await self._search_manager.search_album(artist.strip(), album.strip())
                     
                     if album_id:
+                        # Get album info including popularity
+                        spotify = await ClientManager.get_spotify()
+                        album_info = spotify.album(album_id)
+                        album_popularity = album_info.get('popularity', 0)
+
+                        # Get track info with popularity
+                        tracks = []
+                        track_results = spotify.album_tracks(album_id)
+                        track_ids = [track['id'] for track in track_results['items']]
+                        
+                        # Get track details including popularity (in batches of 50)
+                        for i in range(0, len(track_ids), 50):
+                            batch_ids = track_ids[i:i+50]
+                            batch_tracks = spotify.tracks(batch_ids)['tracks']
+                            for track in batch_tracks:
+                                if track:
+                                    tracks.append({
+                                        'name': track['name'],
+                                        'popularity': track.get('popularity', 0)
+                                    })
+
                         new_entries.append({
                             "Artist": artist.strip(),
                             "Album": album.strip(),
+                            "Album Popularity": album_popularity,
+                            "Tracks": tracks,
                             "Spotify Link": f"spotify:album:{album_id}",
                             "Extraction Date": datetime.now().isoformat()
                         })
-                        user_message(f"Found: {artist.strip()} - {album.strip()}")
                         
                 except ValueError as e:
                     logger.warning(f"Error processing line '{line}': {e}")
@@ -628,7 +651,11 @@ class ContentProcessor:
             
             # Review and save results if we have new entries
             if new_entries:
-                await review_and_save_results(new_entries, destination_file)
+                saved = await review_and_save_results(new_entries, destination_file)
+                if not saved:
+                    # If user chose to exit to main menu or cancel, remove the file if it exists
+                    if os.path.exists(destination_file):
+                        os.remove(destination_file)
             else:
                 user_message("No entries found to save")
                 
@@ -688,39 +715,46 @@ class PlaywrightCrawler:
                 logger.error(f"Error processing URL {url}: {e}")
                 raise
 
-async def review_and_save_results(entries: List[Dict], destination_file: str) -> None:
-    """Review and optionally edit results before saving"""
+async def review_and_save_results(entries: List[Dict], destination_file: str) -> bool:
+    """Review and optionally edit results before saving. Returns True if saved, False if exited."""
     while True:
-        user_message("\nFound albums:")
+        user_message("\nReview found albums:")
         for i, entry in enumerate(entries, 1):
-            user_message(f"{i}. {entry['Artist']} - {entry['Album']}")
+            popularity = entry.get('Album Popularity', 0)
+            user_message(f"{i}. {entry['Artist']} - {entry['Album']} (Popularity: {popularity})")
         
         user_message("\nWhat would you like to do?")
         user_message("1. Save all")
         user_message("2. Delete an entry")
         user_message("3. Cancel")
+        user_message("4. Exit to main menu")
         
-        choice = input("Choose (1-3): ").strip()
+        choice = input("Choose (1-4): ").strip()
         
         if choice == "1":
             file_handler = FileHandler(destination_file)
             await file_handler.save(entries)
             user_message(f"Saved {len(entries)} entries to {destination_file}")
-            break
+            return True
         elif choice == "2":
-            entry_num = input("Enter the number of the entry to delete: ").strip()
+            entry_num = input("Enter the number of the entry to delete (or 'b' to go back): ").strip()
+            if entry_num.lower() == 'b':
+                continue
             try:
                 idx = int(entry_num) - 1
                 if 0 <= idx < len(entries):
                     deleted = entries.pop(idx)
-                    user_message(f"Deleted: {deleted['Artist']} - {deleted['Album']}")
+                    user_message(f"Deleted: {deleted['Artist']} - {deleted['Album']} (Popularity: {deleted.get('Album Popularity', 0)})")
                 else:
                     user_message("Invalid entry number")
             except ValueError:
                 user_message("Please enter a valid number")
         elif choice == "3":
             user_message("Operation cancelled")
-            return
+            return False
+        elif choice == "4":
+            user_message("Returning to main menu")
+            return False
         else:
             user_message("Invalid choice")
 
@@ -759,13 +793,14 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
                     album_ids.add(album_id)
                     logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
 
-        user_message(f"Found {len(album_ids)} unique Spotify album links")
+        user_message(f"\nFound {len(album_ids)} unique Spotify album links")
         if not album_ids:
             logger.warning("No Spotify album links found in the content")
             return
 
         new_entries = []
         spotify = await ClientManager.get_spotify()
+        user_message("Processing found albums...")
 
         # Process each album ID
         for album_id in album_ids:
@@ -802,7 +837,6 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
                 }
 
                 new_entries.append(new_entry)
-                user_message(f"Found: {artist} - {album} (Popularity: {album_popularity})")
 
             except Exception as e:
                 logger.warning(f"Error processing album ID {album_id}: {e}")
@@ -810,16 +844,16 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
 
         if new_entries:
             # Review and edit entries before saving
-            await review_and_save_results(new_entries, destination_file)
-            
-            # Ask if user wants to create a playlist
-            user_message("\nWould you like to create a Spotify playlist with these albums?")
-            user_message("1. Yes")
-            user_message("2. No")
-            choice = input("Choose (1-2): ").strip()
-            
-            if choice == "1":
-                await create_playlist(destination_file)
+            saved = await review_and_save_results(new_entries, destination_file)
+            if saved and os.path.exists(destination_file):
+                # Ask if user wants to create a playlist only if we saved entries
+                user_message("\nWould you like to create a Spotify playlist with these albums?")
+                user_message("1. Yes")
+                user_message("2. No")
+                choice = input("Choose (1-2): ").strip()
+                
+                if choice == "1":
+                    await create_playlist(destination_file)
         else:
             user_message("No entries found to save")
 
@@ -836,22 +870,24 @@ async def scan_webpage(url: str, destination_file: str):
         processor = ContentProcessor()
         await processor.process_url(url, destination_file)
         
-        # Load the results for review
+        # If process_url returns (due to exit to main menu), we should also return
+        if not os.path.exists(destination_file):
+            return
+            
+        # Load the results
         file_handler = FileHandler(destination_file)
         entries = await file_handler.load()
         
         if entries:
-            # Review and edit entries before proceeding
-            await review_and_save_results(entries, destination_file)
-            
-            # Ask if user wants to create a playlist
-            user_message("\nWould you like to create a Spotify playlist with these albums?")
-            user_message("1. Yes")
-            user_message("2. No")
-            choice = input("Choose (1-2): ").strip()
-            
-            if choice == "1":
-                await create_playlist(destination_file)
+            # Ask if user wants to create a playlist only if we have saved entries
+            if os.path.exists(destination_file):
+                user_message("\nWould you like to create a Spotify playlist with these albums?")
+                user_message("1. Yes")
+                user_message("2. No")
+                choice = input("Choose (1-2): ").strip()
+                
+                if choice == "1":
+                    await create_playlist(destination_file)
             
     except Exception as e:
         logger.error(f"Error processing webpage: {e}")
@@ -978,12 +1014,18 @@ async def main():
                 user_message("\nWhere would you like to save the results?")
                 user_message(f"1. Default location ({default_path})")
                 user_message("2. Custom location")
+                user_message("3. Exit to main menu")
                 
-                file_choice = input("Choose (1-2): ").strip()
+                file_choice = input("Choose (1-3): ").strip()
                 
                 if file_choice == "2":
-                    destination_file = input("Enter full path for JSON file: ").strip()
+                    destination_file = input("Enter full path for JSON file (or 'b' to go back): ").strip()
+                    if destination_file.lower() == 'b':
+                        continue
                     destination_file = os.path.normpath(os.path.expanduser(destination_file))
+                elif file_choice == "3":
+                    user_message("Returning to main menu")
+                    continue
                 else:
                     destination_file = default_path
                 
@@ -1005,12 +1047,18 @@ async def main():
                 user_message("\nWhere would you like to save the results?")
                 user_message(f"1. Default location ({default_path})")
                 user_message("2. Custom location")
+                user_message("3. Exit to main menu")
                 
-                file_choice = input("Choose (1-2): ").strip()
+                file_choice = input("Choose (1-3): ").strip()
                 
                 if file_choice == "2":
-                    destination_file = input("Enter full path for JSON file: ").strip()
+                    destination_file = input("Enter full path for JSON file (or 'b' to go back): ").strip()
+                    if destination_file.lower() == 'b':
+                        continue
                     destination_file = os.path.normpath(os.path.expanduser(destination_file))
+                elif file_choice == "3":
+                    user_message("Returning to main menu")
+                    continue
                 else:
                     destination_file = default_path
                 
@@ -1030,15 +1078,21 @@ async def main():
                 user_message(f"1. URL scan results ({url_default})")
                 user_message(f"2. GPT scan results ({gpt_default})")
                 user_message("3. Custom location")
+                user_message("4. Exit to main menu")
                 
-                file_choice = input("Choose (1-3): ").strip()
+                file_choice = input("Choose (1-4): ").strip()
                 
                 if file_choice == "1":
                     json_file = url_default
                 elif file_choice == "2":
                     json_file = gpt_default
+                elif file_choice == "4":
+                    user_message("Returning to main menu")
+                    continue
                 else:
-                    json_file = input("Enter full path to JSON file: ").strip()
+                    json_file = input("Enter full path to JSON file (or 'b' to go back): ").strip()
+                    if json_file.lower() == 'b':
+                        continue
                     json_file = os.path.normpath(os.path.expanduser(json_file))
 
                 if not os.path.exists(json_file):
@@ -1050,7 +1104,7 @@ async def main():
 
             elif choice == "4":
                 user_message("\nGoodbye!")
-                break
+                return  # Use return instead of break to ensure proper cleanup
 
             else:
                 user_message("Invalid choice. Please enter 1-4.")
@@ -1061,10 +1115,8 @@ async def main():
         logger.error(f"Unexpected error: {e}")
         user_message("An unexpected error occurred. Check the logs for details.")
     finally:
-        try:
-            await ClientManager.cleanup()
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+        # Clean up ClientManager resources only
+        await ClientManager.cleanup()
 
 if __name__ == "__main__":
     try:
@@ -1086,9 +1138,48 @@ if __name__ == "__main__":
         if missing_vars:
             logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
             sys.exit(1)
-            
-        # Run the application
-        asyncio.run(main())
+        
+        # Run the application with proper cleanup
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(main())
+        finally:
+            try:
+                # Cancel all running tasks
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                
+                # Allow cancelled tasks to complete
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                
+                # Clean up Windows-specific resources
+                if sys.platform == 'win32':
+                    for task in pending:
+                        if hasattr(task, '_transport') and task._transport is not None:
+                            try:
+                                if hasattr(task._transport, '_proc'):
+                                    task._transport._proc = None
+                                task._transport.close()
+                            except:
+                                pass
+                
+                # Shutdown async generators and close the loop
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                
+                # Close the proactor event loop properly
+                if hasattr(loop, '_proactor'):
+                    loop._proactor.close()
+                loop.close()
+                
+            except Exception as e:
+                logger.error(f"Error during final cleanup: {e}")
+            finally:
+                # Ensure the loop is closed
+                if not loop.is_closed():
+                    loop.close()
         
     except KeyboardInterrupt:
         logger.info("Application stopped by user")
@@ -1096,10 +1187,4 @@ if __name__ == "__main__":
         logger.error(f"Fatal error: {e}")
         print(f"\nFatal error: {e}")
         sys.exit(1)
-    finally:
-        # Ensure all resources are cleaned up
-        try:
-            asyncio.run(ClientManager.cleanup())
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
         
