@@ -9,12 +9,19 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Data directories
+# Data directories and files
 JSON/
+SpotScrape_data/
 logfiles/
+*.json
+!config.json.example
+!package.json
+!package-lock.json
 
 # Environment variables
 .env
+.env.*
+!.env.example
 
 # Configuration files
 config.json
@@ -25,4 +32,9 @@ config.json
 
 # OS files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.log 
