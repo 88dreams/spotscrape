@@ -381,12 +381,23 @@ if __name__ == '__main__':
         
         # Create and start webview window with close handler
         window = webview.create_window('SpotScrape', 'http://localhost:5000',
-                                     width=1400, height=900)
+                                     width=1200, height=920,
+                                     min_size=(1000, 750))
         
         # Add close handler
         def on_closed():
             debug_logger.info("Window closed, shutting down")
-            os._exit(0)
+            try:
+                # Stop the Flask server
+                func = request.environ.get('werkzeug.server.shutdown')
+                if func is not None:
+                    func()
+                # Clean exit without forcing
+                sys.exit(0)
+            except Exception as e:
+                debug_logger.error(f"Error during shutdown: {e}")
+                # Force exit if clean shutdown fails
+                os._exit(0)
             
         window.events.closed += on_closed
         

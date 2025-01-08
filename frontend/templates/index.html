@@ -56,22 +56,17 @@
     <button id="quitButton" class="quit-button" onclick="window.close()">Quit</button>
     
     <div class="min-h-screen bg-gradient">
-        <header class="bg-white shadow">
-            <div class="max-w-7xl mx-auto py-6 px-4">
-                <h1 class="text-3xl font-bold text-gray-900">Spotscraper</h1>
-            </div>
-        </header>
-        
-        <main class="max-w-7xl mx-auto py-6 px-8">
-            <div class="space-y-8">
+        <main class="max-w-7xl mx-auto">
+            <div class="section-container">
                 <!-- Search Section -->
                 <div class="p-6 bg-white shadow rounded-lg">
-                    <h2 class="text-2xl font-semibold mb-4">Search Page</h2>
-                    <div class="space-y-4">
-                        <div class="flex space-x-2">
-                            <input type="text" id="urlInput" class="flex-grow px-4 py-2 border rounded-md" placeholder="Enter URL to search">
+                    <h2 class="section-title">Search Page</h2>
+                    <div class="content-section">
+                        <!-- URL Input -->
+                        <div class="half-width-container">
+                            <input type="text" id="urlInput" class="px-4 py-2 border rounded-md" placeholder="Enter URL to search">
                         </div>
-                        <div class="flex space-x-4 px-1">
+                        <div class="flex space-x-4">
                             <label class="inline-flex items-center">
                                 <input type="radio" name="searchMethod" value="gpt" class="form-radio">
                                 <span class="ml-2">GPT</span>
@@ -81,60 +76,67 @@
                                 <span class="ml-2">URL</span>
                             </label>
                         </div>
-                        <button id="searchButton" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">Go</button>
+                        <div>
+                            <button id="searchButton" class="action-button">Go!</button>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Messages Section -->
-                <div class="bg-white shadow rounded-lg">
-                    <div class="p-6">
-                        <h2 class="text-2xl font-semibold mb-4">Messages</h2>
-                        <div id="messages" class="px-1"></div>
+                <!-- Two Column Layout -->
+                <div class="two-column-section">
+                    <!-- Left Column: Artists + Albums -->
+                    <div class="bg-white shadow rounded-lg">
+                        <div class="p-6">
+                            <h2 class="section-title">Artists + Albums</h2>
+                            <div id="albumsList" class="content-section"></div>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Scraped Content Section -->
-                <div class="bg-white shadow rounded-lg">
-                    <div class="p-6">
-                        <h2 class="text-2xl font-semibold mb-4">Artists + Albums</h2>
-                        <div id="albumsList" class="space-y-2 px-1"></div>
+                    <!-- Right Column: Messages -->
+                    <div class="bg-white shadow rounded-lg">
+                        <div class="p-6">
+                            <h2 class="section-title">Messages</h2>
+                            <div id="messages" class="content-section"></div>
+                        </div>
                     </div>
                 </div>
 
                 <!-- Playlist Options Section -->
                 <div class="bg-white shadow rounded-lg">
                     <div class="p-6">
-                        <h2 class="text-2xl font-semibold mb-4">Create Playlists</h2>
-                        <div class="space-y-6 px-1">
-                            <div class="flex items-center justify-between">
-                                <label class="flex flex-col">
-                                    <span>All Tracks</span>
-                                    <span class="text-sm text-gray-600">Include every track from selected albums</span>
-                                </label>
+                        <h2 class="section-title">Create Playlists</h2>
+                        <div class="content-section">
+                            <div class="flex items-center">
                                 <label class="switch">
                                     <input type="checkbox" id="allTracksSwitch" checked>
                                     <span class="slider round"></span>
                                 </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <label class="flex flex-col">
-                                    <span>Popular Tracks</span>
-                                    <span class="text-sm text-gray-600">Include only the most popular track from each album</span>
+                                <label class="flex flex-col ml-3">
+                                    <span>All Tracks</span>
+                                    <span class="text-sm text-gray-600">Include every track from selected albums</span>
                                 </label>
+                            </div>
+                            <div class="flex items-center">
                                 <label class="switch">
                                     <input type="checkbox" id="popularTracksSwitch">
                                     <span class="slider round"></span>
                                 </label>
+                                <label class="flex flex-col ml-3">
+                                    <span>Popular Tracks</span>
+                                    <span class="text-sm text-gray-600">Include only the most popular track from each album</span>
+                                </label>
                             </div>
-                            <div class="space-y-2">
-                                <label>Playlist Name</label>
-                                <input type="text" id="playlistName" class="w-full px-4 py-2 border rounded-md" placeholder="Enter playlist name">
+                            <!-- Playlist Name Input -->
+                            <div class="half-width-container">
+                                <input type="text" id="playlistName" class="px-4 py-2 border rounded-md" placeholder="Enter playlist name">
                             </div>
-                            <div class="space-y-2">
-                                <label>Playlist Description</label>
-                                <textarea id="playlistDescription" class="w-full px-4 py-2 border rounded-md" rows="3" placeholder="Enter playlist description"></textarea>
+                            <!-- Playlist Description Input -->
+                            <div class="half-width-container">
+                                <textarea id="playlistDescription" class="px-4 py-2 border rounded-md" rows="3" placeholder="Enter playlist description"></textarea>
                             </div>
-                            <button id="createPlaylistButton" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">GO</button>
+                            <div>
+                                <button id="createPlaylistButton" class="action-button">Go!</button>
+                            </div>
                         </div>
                     </div>
                 </div>

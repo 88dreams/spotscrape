@@ -8,16 +8,20 @@ body {
 
 .min-h-screen {
     min-height: 100vh;
+    padding: 1rem;
 }
 
 .bg-gradient {
     background: linear-gradient(180deg, #f3f4f6 0%, #e5e7eb 100%);
+    min-height: calc(100vh - 2rem);
+    border-radius: 1rem;
 }
 
 .max-w-7xl {
-    max-width: 80rem;
+    max-width: 72rem;
     margin-left: auto;
     margin-right: auto;
+    padding: 0.5rem;
 }
 
 /* Header styles */
@@ -84,8 +88,9 @@ textarea:focus {
 .switch {
     position: relative;
     display: inline-block;
-    width: 60px;
-    height: 34px;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
 }
 
 .switch input {
@@ -108,16 +113,16 @@ textarea:focus {
 .slider:before {
     position: absolute;
     content: "";
-    height: 26px;
-    width: 26px;
-    left: 4px;
-    bottom: 4px;
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
     background-color: white;
     transition: .4s;
 }
 
 .slider.round {
-    border-radius: 34px;
+    border-radius: 22px;
 }
 
 .slider.round:before {
@@ -129,7 +134,7 @@ input:checked + .slider {
 }
 
 input:checked + .slider:before {
-    transform: translateX(26px);
+    transform: translateX(18px);
 }
 
 /* Button styles */
@@ -190,4 +195,125 @@ button:hover {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Section title styles */
+.section-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    margin-top: 0;
+    padding: 0;
+    color: #1f2937;
+}
+
+/* Content section padding */
+.content-section {
+    padding: 0 1.5rem 0.75rem;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+/* Adjust the container padding to handle spacing */
+.p-6 {
+    padding: 0.75rem 1.5rem;
+}
+
+/* Button container styles */
+.content-section > div:last-child {
+    margin-top: 8px;  /* Extra spacing before button */
+}
+
+/* Messages specific styles */
+#messages.content-section {
+    margin: 20px 0;
+    padding: 16px 24px;
+    height: 200px;  /* Reduced from 400px to 200px */
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f9fafb;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.875rem;
+}
+
+/* Action button styles */
+.action-button {
+    background-color: #2563eb;
+    color: white;
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: background-color 0.2s;
+    width: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.action-button:hover {
+    background-color: #1d4ed8;
+}
+
+/* Section container and spacing */
+.section-container {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;  /* Reduced from 32px to 20px */
+}
+
+/* Two Column Layout */
+.two-column-section {
+    display: flex;
+    gap: 24px;
+    width: 100%;
+}
+
+.two-column-section > div {
+    flex: 1;
+    min-width: 0;  /* Prevent flex items from overflowing */
+}
+
+/* Remove the space-y classes since we're using gap */
+.space-y-8 > * + *,
+.space-y-4 > * + *,
+.space-y-2 > * + * {
+    margin-top: 0;
+}
+
+/* Ensure messages section has proper height */
+.two-column-section #messages {
+    height: 200px;  /* Reduced from 400px to 200px */
+    margin: 0;
+    padding: 16px 24px;
+}
+
+/* Half width container for inputs */
+.half-width-container {
+    width: 50%;
+}
+
+.half-width-container input,
+.half-width-container textarea {
+    width: 100%;
+    display: block;
+}
+
+/* Ensure messages and albums sections have proper height */
+.two-column-section #messages,
+.two-column-section #albumsList {
+    height: 200px;
+    margin: 0;
+    padding: 16px 24px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f9fafb;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.875rem;
+    overflow-y: auto;
 } 
