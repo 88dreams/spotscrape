@@ -758,7 +758,7 @@ async def review_and_save_results(entries: List[Dict], destination_file: str) ->
         else:
             user_message("Invalid choice")
 
-async def scan_spotify_links(url: str, destination_file: str) -> None:
+async def scan_spotify_links(url: str, destination_file: str = None):
     """Scan webpage for Spotify links and add artist and album data to JSON"""
     extractor = WebContentExtractor()
     try:
@@ -794,103 +794,75 @@ async def scan_spotify_links(url: str, destination_file: str) -> None:
                     logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
 
         user_message(f"\nFound {len(album_ids)} unique Spotify album links")
-        if not album_ids:
-            logger.warning("No Spotify album links found in the content")
-            return
-
-        new_entries = []
-        spotify = await ClientManager.get_spotify()
         user_message("Processing found albums...")
-
-        # Process each album ID
+        
+        # Get Spotify client
+        spotify = await ClientManager.get_spotify()
+        
+        # Process each album
+        entries = []
         for album_id in album_ids:
             try:
-                # Get album info
                 album_info = spotify.album(album_id)
-                artist = album_info['artists'][0]['name']
-                album = album_info['name']
-                album_popularity = album_info.get('popularity', 0)
-
-                # Get track info
-                tracks = []
-                track_results = spotify.album_tracks(album_id)
-                track_ids = [track['id'] for track in track_results['items']]
-                
-                # Get track details including popularity (in batches of 50)
-                for i in range(0, len(track_ids), 50):
-                    batch_ids = track_ids[i:i+50]
-                    batch_tracks = spotify.tracks(batch_ids)['tracks']
-                    for track in batch_tracks:
-                        if track:
-                            tracks.append({
-                                'name': track['name'],
-                                'popularity': track.get('popularity', 0)
-                            })
-
-                new_entry = {
-                    "Artist": artist,
-                    "Album": album,
-                    "Album Popularity": album_popularity,
-                    "Tracks": tracks,
-                    "Spotify Link": f"spotify:album:{album_id}",
-                    "Extraction Date": datetime.now().isoformat()
+                entry = {
+                    'Album ID': album_id,
+                    'Artist': album_info['artists'][0]['name'],
+                    'Album': album_info['name'],
+                    'Album Popularity': album_info.get('popularity', 0)
                 }
-
-                new_entries.append(new_entry)
-
+                entries.append(entry)
             except Exception as e:
-                logger.warning(f"Error processing album ID {album_id}: {e}")
+                logger.error(f"Error processing album {album_id}: {str(e)}")
                 continue
-
-        if new_entries:
-            # Review and edit entries before saving
-            saved = await review_and_save_results(new_entries, destination_file)
-            if saved and os.path.exists(destination_file):
-                # Ask if user wants to create a playlist only if we saved entries
-                user_message("\nWould you like to create a Spotify playlist with these albums?")
-                user_message("1. Yes")
-                user_message("2. No")
-                choice = input("Choose (1-2): ").strip()
-                
-                if choice == "1":
-                    await create_playlist(destination_file)
-        else:
-            user_message("No entries found to save")
-
+        
+        # Automatically save results without prompting
+        if destination_file:
+            with open(destination_file, 'w') as f:
+                json.dump(entries, f, indent=4)
+        
+        return entries
+        
     except Exception as e:
-        logger.error(f"Error scanning Spotify links from {url}: {e}")
+        logger.error(f"Error in scan_spotify_links: {str(e)}")
         raise
     finally:
         # Ensure Playwright resources are cleaned up
         await extractor.cleanup()
 
-async def scan_webpage(url: str, destination_file: str):
-    """Scan webpage for music content and process with GPT"""
+async def scan_webpage(url: str, destination_file: str = None):
+    """Scan webpage using GPT to extract artist and album data"""
     try:
-        processor = ContentProcessor()
-        await processor.process_url(url, destination_file)
+        # ... existing code ...
         
-        # If process_url returns (due to exit to main menu), we should also return
-        if not os.path.exists(destination_file):
-            return
-            
-        # Load the results
-        file_handler = FileHandler(destination_file)
-        entries = await file_handler.load()
-        
-        if entries:
-            # Ask if user wants to create a playlist only if we have saved entries
-            if os.path.exists(destination_file):
-                user_message("\nWould you like to create a Spotify playlist with these albums?")
-                user_message("1. Yes")
-                user_message("2. No")
-                choice = input("Choose (1-2): ").strip()
+        # Process the response
+        entries = []
+        for item in response:
+            try:
+                # Search for album
+                results = spotify.search(q=f"artist:{item['artist']} album:{item['album']}", type='album', limit=1)
                 
-                if choice == "1":
-                    await create_playlist(destination_file)
-            
+                if results['albums']['items']:
+                    album = results['albums']['items'][0]
+                    entry = {
+                        'Album ID': album['id'],
+                        'Artist': album['artists'][0]['name'],
+                        'Album': album['name'],
+                        'Album Popularity': album.get('popularity', 0)
+                    }
+                    entries.append(entry)
+            except Exception as e:
+                logger.error(f"Error processing album {item}: {str(e)}")
+                continue
+        
+        # Automatically save results without prompting
+        if destination_file:
+            with open(destination_file, 'w') as f:
+                json.dump(entries, f, indent=4)
+        
+        return entries
+        
     except Exception as e:
-        logger.error(f"Error processing webpage: {e}")
+        logger.error(f"Error in scan_webpage: {str(e)}")
         raise
 
 async def create_playlist(json_file: str, playlist_name: str = None):

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotscraper</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <style>
+        /* Messages window styles */
+        #messages {
+            margin: 20px 0;
+            padding: 10px;
+            height: 150px;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #f9fafb;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.875rem;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #e5e7eb;
+            color: #374151;
+        }
+        .message.error {
+            color: #dc2626;
+            background-color: #fee2e2;
+            border-color: #fecaca;
+            padding: 10px;
+            border-radius: 6px;
+        }
+        .quit-button {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            padding: 8px 16px;
+            background-color: #dc2626;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            transition: background-color 0.2s;
+            z-index: 1000;
+        }
+        .quit-button:hover {
+            background-color: #b91c1c;
+        }
+    </style>
+</head>
+<body>
+    <button id="quitButton" class="quit-button" onclick="window.close()">Quit</button>
+    
+    <div class="min-h-screen bg-gradient">
+        <header class="bg-white shadow">
+            <div class="max-w-7xl mx-auto py-6 px-4">
+                <h1 class="text-3xl font-bold text-gray-900">Spotscraper</h1>
+            </div>
+        </header>
+        
+        <main class="max-w-7xl mx-auto py-6 px-8">
+            <div class="space-y-8">
+                <!-- Search Section -->
+                <div class="p-6 bg-white shadow rounded-lg">
+                    <h2 class="text-2xl font-semibold mb-4">Search Page</h2>
+                    <div class="space-y-4">
+                        <div class="flex space-x-2">
+                            <input type="text" id="urlInput" class="flex-grow px-4 py-2 border rounded-md" placeholder="Enter URL to search">
+                        </div>
+                        <div class="flex space-x-4 px-1">
+                            <label class="inline-flex items-center">
+                                <input type="radio" name="searchMethod" value="gpt" class="form-radio">
+                                <span class="ml-2">GPT</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="radio" name="searchMethod" value="url" class="form-radio" checked>
+                                <span class="ml-2">URL</span>
+                            </label>
+                        </div>
+                        <button id="searchButton" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">Go</button>
+                    </div>
+                </div>
+
+                <!-- Messages Section -->
+                <div class="bg-white shadow rounded-lg">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-semibold mb-4">Messages</h2>
+                        <div id="messages" class="px-1"></div>
+                    </div>
+                </div>
+
+                <!-- Scraped Content Section -->
+                <div class="bg-white shadow rounded-lg">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-semibold mb-4">Artists + Albums</h2>
+                        <div id="albumsList" class="space-y-2 px-1"></div>
+                    </div>
+                </div>
+
+                <!-- Playlist Options Section -->
+                <div class="bg-white shadow rounded-lg">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-semibold mb-4">Create Playlists</h2>
+                        <div class="space-y-6 px-1">
+                            <div class="flex items-center justify-between">
+                                <label class="flex flex-col">
+                                    <span>All Tracks</span>
+                                    <span class="text-sm text-gray-600">Include every track from selected albums</span>
+                                </label>
+                                <label class="switch">
+                                    <input type="checkbox" id="allTracksSwitch" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label class="flex flex-col">
+                                    <span>Popular Tracks</span>
+                                    <span class="text-sm text-gray-600">Include only the most popular track from each album</span>
+                                </label>
+                                <label class="switch">
+                                    <input type="checkbox" id="popularTracksSwitch">
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+                            <div class="space-y-2">
+                                <label>Playlist Name</label>
+                                <input type="text" id="playlistName" class="w-full px-4 py-2 border rounded-md" placeholder="Enter playlist name">
+                            </div>
+                            <div class="space-y-2">
+                                <label>Playlist Description</label>
+                                <textarea id="playlistDescription" class="w-full px-4 py-2 border rounded-md" rows="3" placeholder="Enter playlist description"></textarea>
+                            </div>
+                            <button id="createPlaylistButton" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">GO</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html> 
