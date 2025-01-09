@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateProgress(percent, message) {
         progressBar.style.width = `${percent}%`;
         progressText.textContent = message;
+        document.getElementById('progressPercent').textContent = `${Math.round(percent)}%`;
     }
 
     // Function to show/hide progress bar
@@ -118,12 +119,13 @@ document.addEventListener('DOMContentLoaded', function() {
         currentUrl = url;
         resetUI();
         toggleProgress(true);
-        updateProgress(0, 'Starting search...');
+        updateProgress(10, 'Starting search...');
 
         const searchMethod = document.querySelector('input[name="searchMethod"]:checked').value;
         const endpoint = searchMethod === 'gpt' ? '/api/scan-webpage' : '/api/scan-url';
 
         try {
+            updateProgress(20, 'Sending request...');
             const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: {
@@ -136,6 +138,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error('Search failed');
             }
 
+            updateProgress(30, 'Processing response...');
             const data = await response.json();
             if (data.error) {
                 throw new Error(data.error);
@@ -144,12 +147,15 @@ document.addEventListener('DOMContentLoaded', function() {
             if (searchMethod === 'gpt') {
                 // For GPT search, start polling for results
                 if (data.status === 'processing') {
+                    updateProgress(40, 'GPT processing started...');
                     pollForResults();
                 }
             } else {
                 // For URL search, update immediately
                 if (data.albums) {
+                    updateProgress(90, 'Finalizing results...');
                     updateAlbumsList(data.albums);
+                    updateProgress(100, 'Search completed successfully');
                     addMessage('Search completed successfully');
                 } else {
                     throw new Error('No albums found');
@@ -169,20 +175,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Function to poll for GPT search results
     async function pollForResults() {
+        let progressValue = 40;
         const pollInterval = setInterval(async () => {
             try {
+                progressValue = Math.min(progressValue + 2, 90); // Increment progress but cap at 90%
+                updateProgress(progressValue, 'Processing content...');
+                
                 const response = await fetch('/api/results-gpt');
                 const data = await response.json();
                 
                 if (data.status === 'complete') {
                     clearInterval(pollInterval);
-                    toggleProgress(false);
                     if (data.albums) {
+                        updateProgress(100, 'Search completed successfully');
                         updateAlbumsList(data.albums);
                         addMessage('Search completed successfully');
                     } else {
                         throw new Error('No albums found');
                     }
+                    toggleProgress(false);
                 } else if (data.status === 'error') {
                     clearInterval(pollInterval);
                     toggleProgress(false);
