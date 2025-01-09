@@ -11,11 +11,10 @@
     <div class="container mx-auto px-4 py-2">
         <h1 class="text-3xl font-bold text-center mb-2">SpotScrape</h1>
         
-        <!-- URL Input Section -->
-        <div class="bg-white rounded-lg shadow-md pt-3 px-6 pb-4 mb-2">
-            <h2 class="text-lg font-semibold mb-2 uppercase">Search</h2>
-            <div class="flex flex-col gap-2">
-                <!-- Search Method Selection -->
+        <!-- Search Section -->
+        <section class="bg-white rounded-lg shadow-md p-4 mb-2">
+            <h2 class="text-lg font-semibold uppercase mb-2">Search</h2>
+            <div class="space-y-2">
                 <div class="flex items-center space-x-6">
                     <label class="inline-flex items-center">
                         <input type="radio" name="searchMethod" value="url" class="form-radio" checked>
@@ -26,49 +25,44 @@
                         <span class="ml-2">GPT Search</span>
                     </label>
                 </div>
-                <!-- URL Input and Search Button -->
                 <div class="flex flex-col md:flex-row gap-2">
                     <input type="text" id="urlInput" placeholder="Enter URL" 
                         class="flex-grow p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
                     <button id="searchButton" 
-                        class="bg-blue-500 text-white px-6 py-2 rounded hover:bg-blue-600 transition-colors">
+                        class="bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors duration-200">
                         Search
                     </button>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <!-- Progress Bar -->
-        <div id="progressContainer" class="bg-white rounded-lg shadow-md pt-3 px-6 pb-4 mb-2 hidden">
-            <div class="mb-2 flex justify-between items-center">
+        <!-- Progress Section -->
+        <section id="progressContainer" class="bg-white rounded-lg shadow-md p-4 mb-2 hidden">
+            <div class="flex justify-between items-center mb-2">
                 <span id="progressText" class="text-sm text-gray-600">Processing...</span>
                 <span id="progressPercent" class="text-sm font-semibold">0%</span>
             </div>
             <div class="w-full bg-gray-200 rounded-full h-2.5">
                 <div id="progressBar" class="bg-blue-500 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
             </div>
-        </div>
+        </section>
 
         <!-- Messages Section -->
-        <div class="bg-white rounded-lg shadow-md pt-3 px-6 pb-4 mb-2">
-            <h2 class="text-lg font-semibold mb-2 uppercase">Messages</h2>
+        <section class="bg-white rounded-lg shadow-md p-4 mb-2">
+            <h2 class="text-lg font-semibold uppercase mb-2">Messages</h2>
             <div id="messages" class="max-h-40 overflow-y-auto"></div>
-        </div>
+        </section>
 
-        <!-- Albums List Section -->
-        <div class="bg-white rounded-lg shadow-md pt-3 px-6 pb-4 mb-2">
-            <h2 class="text-lg font-semibold mb-2 uppercase">Albums + Artists</h2>
-            <div id="albumsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                <!-- Albums will be dynamically added here -->
-            </div>
-        </div>
+        <!-- Albums Section -->
+        <section class="bg-white rounded-lg shadow-md p-4 mb-2">
+            <h2 class="text-lg font-semibold uppercase mb-2">Albums + Artists</h2>
+            <div id="albumsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2"></div>
+        </section>
 
-        <!-- Playlist Creation Section -->
-        <div class="bg-white rounded-lg shadow-md pt-3 px-6 pb-4">
-            <h2 class="text-lg font-semibold mb-2 uppercase">Create Playlist</h2>
-            
-            <!-- Toggle Switches -->
-            <div class="mb-4">
+        <!-- Playlist Section -->
+        <section class="bg-white rounded-lg shadow-md p-4">
+            <h2 class="text-lg font-semibold uppercase mb-2">Create Playlist</h2>
+            <div class="space-y-4">
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <label class="text-gray-700">All Tracks</label>
@@ -85,30 +79,26 @@
                         </label>
                     </div>
                 </div>
-            </div>
-
-            <!-- Playlist Details -->
-            <div class="space-y-2 mb-4">
-                <div>
-                    <label for="playlistName" class="block text-gray-700 mb-1">Playlist Name</label>
-                    <input type="text" id="playlistName" placeholder="Enter playlist name" 
-                        class="w-full h-10 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <div class="space-y-2">
+                    <div>
+                        <label for="playlistName" class="block text-gray-700 mb-1">Playlist Name</label>
+                        <input type="text" id="playlistName" placeholder="Enter playlist name" 
+                            class="w-full h-10 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label for="playlistDescription" class="block text-gray-700 mb-1">Description</label>
+                        <textarea id="playlistDescription" placeholder="Enter playlist description" 
+                            class="w-full h-10 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-hidden leading-tight"></textarea>
+                    </div>
                 </div>
-                <div>
-                    <label for="playlistDescription" class="block text-gray-700 mb-1">Description</label>
-                    <textarea id="playlistDescription" placeholder="Enter playlist description" 
-                        class="w-full h-10 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-hidden leading-tight"></textarea>
+                <div class="flex justify-center">
+                    <button id="createPlaylistButton" 
+                        class="w-1/2 bg-green-500 text-white px-6 py-3 rounded hover:bg-green-600 transition-colors font-semibold">
+                        GO
+                    </button>
                 </div>
             </div>
-
-            <!-- Create Button -->
-            <div class="flex justify-center">
-                <button id="createPlaylistButton" 
-                    class="w-1/2 bg-green-500 text-white px-6 py-3 rounded hover:bg-green-600 transition-colors font-semibold">
-                    GO
-                </button>
-            </div>
-        </div>
+        </section>
     </div>
 
     <script src="/static/js/app.js"></script>
