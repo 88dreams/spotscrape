@@ -480,6 +480,21 @@ if __name__ == '__main__':
                 func = request.environ.get('werkzeug.server.shutdown')
                 if func is not None:
                     func()
+
+                # Clean up any pending tasks
+                loop = asyncio.get_event_loop()
+                if not loop.is_closed():
+                    # Cancel all tasks
+                    for task in asyncio.all_tasks(loop):
+                        task.cancel()
+                    
+                    # Run loop one last time to complete cancellation
+                    loop.run_until_complete(asyncio.gather(*asyncio.all_tasks(loop), return_exceptions=True))
+                    
+                    # Close the loop
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                    loop.close()
+
                 # Clean exit without forcing
                 sys.exit(0)
             except Exception as e:

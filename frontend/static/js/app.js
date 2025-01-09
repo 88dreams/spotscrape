@@ -248,6 +248,61 @@ document.addEventListener('DOMContentLoaded', function() {
     popularTracksSwitch.addEventListener('change', handleTrackTypeChange);
     createPlaylistButton.addEventListener('click', handleCreatePlaylist);
 
+    // Function to handle playlist creation
+    async function handleCreatePlaylist() {
+        if (playlistCreationInProgress) {
+            return;
+        }
+
+        if (selectedAlbums.size === 0) {
+            addMessage('Please select at least one album', true);
+            return;
+        }
+
+        playlistCreationInProgress = true;
+        createPlaylistButton.disabled = true;
+        createPlaylistButton.textContent = 'Creating...';
+        toggleProgress(true);
+        updateProgress(0, 'Starting playlist creation...');
+
+        try {
+            const response = await fetch('/api/create-playlist', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    albums: Array.from(selectedAlbums),
+                    playlistName: playlistName.value || getDefaultPlaylistName(),
+                    playlistDescription: playlistDescription.value,
+                    includeAllTracks: allTracksSwitch.checked,
+                    includePopularTracks: popularTracksSwitch.checked
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to create playlist');
+            }
+
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            showCompletionPopup('Playlist created successfully!');
+            addMessage('Playlist created successfully!');
+
+        } catch (error) {
+            console.error('Playlist creation error:', error);
+            addMessage('Error creating playlist: ' + error.message, true);
+            createPlaylistButton.disabled = false;
+            createPlaylistButton.textContent = 'GO';
+        } finally {
+            playlistCreationInProgress = false;
+            toggleProgress(false);
+        }
+    }
+
     function handleTrackTypeChange(event) {
         const isAllTracks = event.target === allTracksSwitch;
         const otherSwitch = isAllTracks ? popularTracksSwitch : allTracksSwitch;

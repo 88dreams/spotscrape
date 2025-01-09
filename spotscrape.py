@@ -206,7 +206,7 @@ class PlaylistManager:
     """Manages Spotify playlist operations with improved efficiency"""
     def __init__(self):
         self._lock = AsyncLock()
-        self.batch_size = 100
+        self.batch_size = 100  # Spotify's limit per request
         self._spotify = None
         self._track_cache = {}  # Cache for track information
         self.progress_callback = None
@@ -225,36 +225,6 @@ class PlaylistManager:
             self._spotify = await ClientManager.get_spotify()
         return self._spotify
 
-    async def _get_tracks_info(self, track_ids: List[str]) -> Dict[str, dict]:
-        """Batch fetch track information with caching"""
-        spotify = await self._get_spotify()
-        result = {}
-        to_fetch = []
-
-        # Check cache first
-        for track_id in track_ids:
-            if track_id in self._track_cache:
-                result[track_id] = self._track_cache[track_id]
-            else:
-                to_fetch.append(track_id)
-
-        # Fetch uncached tracks in batches of 50
-        if to_fetch:
-            for i in range(0, len(to_fetch), 50):
-                batch = to_fetch[i:i + 50]
-                try:
-                    tracks_info = spotify.tracks(batch)
-                    for track in tracks_info['tracks']:
-                        if track:  # Check if track exists
-                            self._track_cache[track['id']] = track
-                            result[track['id']] = track
-                except Exception as e:
-                    logger.error(f"Error fetching track batch {i}-{i+50}: {e}")
-                await asyncio.sleep(0.1)  # Prevent rate limiting
-
-        return result
-
-    @RateLimiter(max_calls=100, time_period=60)
     async def create_playlist(self, name: str, description: str = "") -> str:
         """Create a new playlist with rate limiting and caching"""
         self._update_progress(0, "Creating playlist...")
@@ -276,43 +246,41 @@ class PlaylistManager:
             logger.error(f"Error creating playlist '{name}': {e}")
             raise
 
-    @RateLimiter(max_calls=100, time_period=60)
-    async def add_tracks(self, playlist_id: str, track_uris: List[str]) -> None:
-        """Add tracks to playlist with batching and rate limiting"""
-        if not track_uris:
+    async def add_tracks_to_playlist(self, playlist_id: str, track_ids: list):
+        """Add tracks to a playlist with proper batching"""
+        if not track_ids:
             return
 
         try:
             spotify = await self._get_spotify()
-            
-            for i in range(0, len(track_uris), self.batch_size):
-                batch = track_uris[i:i + self.batch_size]
-                async with self._lock:
-                    spotify.playlist_add_items(playlist_id, batch)
-                await asyncio.sleep(0.1)  # Prevent rate limiting
-                logger.debug(f"Added batch of {len(batch)} tracks to playlist {playlist_id}")
-        except Exception as e:
-            logger.error(f"Error adding tracks to playlist {playlist_id}: {e}")
-            raise
-
-    async def add_tracks_to_playlist(self, playlist_id, track_ids):
-        """Add tracks to a playlist"""
-        if not track_ids:
-            return
-        
-        try:
-            # Split track_ids into chunks of 100 (Spotify API limit)
-            chunks = [track_ids[i:i+100] for i in range(0, len(track_ids), 100)]
-            total_chunks = len(chunks)
+            total_tracks = len(track_ids)
+            chunks = [track_ids[i:i + self.batch_size] for i in range(0, total_tracks, self.batch_size)]
             
             for i, chunk in enumerate(chunks, 1):
-                await self._spotify.playlist_add_items(playlist_id, chunk)
-                progress = (i / total_chunks) * 100
-                self._update_progress(progress, f"Added tracks {i*100}/{len(track_ids)}")
+                try:
+                    # Convert track IDs to URIs if needed
+                    track_uris = [f"spotify:track:{track_id}" if not track_id.startswith('spotify:') else track_id 
+                                for track_id in chunk]
+                    
+                    async with self._lock:
+                        spotify.playlist_add_items(playlist_id, track_uris)
+                    
+                    progress = (i / len(chunks)) * 100
+                    tracks_added = min(i * self.batch_size, total_tracks)
+                    self._update_progress(progress, f"Added {tracks_added}/{total_tracks} tracks")
+                    
+                    # Small delay to prevent rate limiting
+                    await asyncio.sleep(0.1)
+                    
+                except Exception as e:
+                    logger.error(f"Error adding batch {i} to playlist: {e}")
+                    raise
             
             self._update_progress(100, "All tracks added successfully!")
+            
         except Exception as e:
             logger.error(f"Error adding tracks to playlist: {e}")
+            raise
 
 class SpotifySearchManager:
     """Handles Spotify search operations with caching"""
