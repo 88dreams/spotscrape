@@ -1,5 +1,5 @@
 import webview
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 import threading
 import os
@@ -19,6 +19,8 @@ from queue import Queue
 import signal
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotscrape import SpotifySearchManager, PlaylistManager, WebContentExtractor, ContentProcessor
+from functools import wraps
 
 # Configure debug logging
 def setup_debug_logging():
@@ -74,6 +76,9 @@ scan_results = {
 # Add after other global variables
 message_queue = Queue()
 
+# Global progress queue for SSE
+progress_queue = Queue()
+
 # Modify the user_message function to send to GUI
 def gui_message(msg: str, log_only: bool = False):
     debug_logger.info(f"GUI Message: {msg}")
@@ -81,6 +86,20 @@ def gui_message(msg: str, log_only: bool = False):
 
 # Override the user_message in spotscrape
 spotscrape.user_message = gui_message
+
+def send_progress(progress, message):
+    """Helper function to send progress updates"""
+    progress_queue.put({
+        'progress': progress,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    })
+
+def async_route(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        return asyncio.run(f(*args, **kwargs))
+    return wrapped
 
 @app.route('/')
 def index():
@@ -98,83 +117,56 @@ def get_url_results():
     return jsonify(scan_results['url'])
 
 @app.route('/api/scan-url', methods=['POST'])
-def scan_url():
-    """Renamed from scan-spotify to match frontend"""
-    debug_logger.debug("Received scan-url request")
+@async_route
+async def scan_url():
     try:
         data = request.json
         url = data.get('url')
-        debug_logger.debug(f"Processing URL: {url}")
-        
         if not url:
-            debug_logger.error("No URL provided")
             return jsonify({'error': 'URL is required'}), 400
-            
-        # Create JSON directory if it doesn't exist
-        json_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON"))
-        os.makedirs(json_dir, exist_ok=True)
+
+        # Initialize managers with progress callbacks
+        spotify_manager = SpotifySearchManager()
+        spotify_manager.set_progress_callback(send_progress)
+        web_extractor = WebContentExtractor()
         
-        # Default file path
-        destination_file = os.path.normpath(os.path.join(json_dir, "spotscrape_url.json"))
-        debug_logger.debug(f"Using destination file: {destination_file}")
+        send_progress(10, "Starting URL scan...")
+        content = await web_extractor.extract_content(url)
         
-        # Reset results
-        scan_results['url'] = {'status': 'processing', 'albums': [], 'error': None}
+        send_progress(30, "Processing content...")
+        album_ids = await spotify_manager.scan_spotify_links(content)
         
-        # Run scan in a separate thread
-        def run_scan():
-            try:
-                debug_logger.debug("Starting scan in new thread")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(scan_spotify_links(url, destination_file))
-                
-                # Load results from file
-                if os.path.exists(destination_file):
-                    with open(destination_file, 'r') as f:
-                        albums_data = json.load(f)
-                        # Format albums for frontend display
-                        formatted_albums = []
-                        for album in albums_data:
-                            formatted_albums.append({
-                                'id': album.get('Album ID', ''),
-                                'artist': album.get('Artist', ''),
-                                'name': album.get('Album', ''),
-                                'popularity': album.get('Album Popularity', 0)
-                            })
-                        scan_results['url'] = {
-                            'status': 'complete',
-                            'albums': formatted_albums,
-                            'error': None
+        if not album_ids:
+            return jsonify({'error': 'No Spotify albums found on the page'}), 404
+        
+        send_progress(50, "Retrieving album information...")
+        albums = []
+        total_albums = len(album_ids)
+        
+        for i, album_id in enumerate(album_ids, 1):
+            album_info = await spotify_manager.get_album_info(album_id)
+            if album_info:
+                albums.append({
+                    'id': album_id,
+                    'name': album_info.get('name', 'Unknown Album'),
+                    'artist': album_info.get('artists', [{'name': 'Unknown Artist'}])[0]['name'],
+                    'popularity': album_info.get('popularity', 0),
+                    'tracks': [
+                        {
+                            'id': track['id'],
+                            'name': track['name'],
+                            'popularity': track.get('popularity', 0)
                         }
-                        debug_logger.debug(f"Loaded {len(formatted_albums)} albums from file")
-                        # Just send a simple status message
-                        gui_message(f"Found {len(formatted_albums)} albums")
-                else:
-                    scan_results['url'] = {
-                        'status': 'error',
-                        'albums': [],
-                        'error': 'No results found'
-                    }
-                
-                loop.close()
-                debug_logger.debug("Scan completed successfully")
-            except Exception as e:
-                debug_logger.error(f"Error in scan thread: {str(e)}", exc_info=True)
-                scan_results['url'] = {
-                    'status': 'error',
-                    'albums': [],
-                    'error': str(e)
-                }
+                        for track in album_info.get('tracks', {}).get('items', [])
+                    ]
+                })
+            progress = 50 + (i / total_albums * 40)
+            send_progress(progress, f"Retrieved album {i} of {total_albums}")
         
-        thread = threading.Thread(target=run_scan)
-        thread.start()
-        debug_logger.debug("Scan thread started")
-        
-        return jsonify({'status': 'processing'})
-        
+        send_progress(100, "Scan complete!")
+        return jsonify({'albums': albums})
+
     except Exception as e:
-        debug_logger.error(f"Error in scan-url endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/scan-gpt', methods=['POST'])
@@ -256,114 +248,70 @@ def scan_gpt():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/create-playlist', methods=['POST'])
-def create_new_playlist():
-    debug_logger.debug("Received create-playlist request")
+@async_route
+async def create_playlist():
     try:
         data = request.json
-        debug_logger.debug(f"Playlist creation data: {data}")
-        
-        album_ids = data.get('albums', [])
+        albums = data.get('albums', [])
         playlist_name = data.get('playlistName', '')
         playlist_description = data.get('playlistDescription', '')
         include_all_tracks = data.get('includeAllTracks', True)
         include_popular_tracks = data.get('includePopularTracks', False)
+
+        if not albums:
+            return jsonify({'error': 'No albums selected'}), 400
+
+        # Initialize managers with progress callbacks
+        playlist_manager = PlaylistManager()
+        playlist_manager.set_progress_callback(send_progress)
+        spotify_manager = SpotifySearchManager()
+        spotify_manager.set_progress_callback(send_progress)
         
-        if not album_ids:
-            debug_logger.error("No albums provided")
-            return jsonify({'error': 'Album IDs are required'}), 400
-            
-        # Run playlist creation in a separate thread
-        def run_creation():
-            try:
-                debug_logger.debug("Starting playlist creation in new thread")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                # Get Spotify client
-                spotify = spotipy.Spotify(auth_manager=SpotifyOAuth(
-                    client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-                    client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-                    redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
-                    scope="playlist-modify-public playlist-modify-private"
-                ))
-                
-                # Create playlist
-                user_id = spotify.current_user()['id']
-                playlist = spotify.user_playlist_create(
-                    user=user_id,
-                    name=playlist_name,
-                    public=True,
-                    description=playlist_description or f"Created by SpotScrape on {datetime.now().strftime('%Y-%m-%d')}"
-                )
-                
-                # Add tracks
-                track_uris = []
-                for album_id in album_ids:
-                    try:
-                        # Extract album ID from full Spotify URL if needed
-                        if 'spotify.com' in album_id:
-                            album_id = album_id.split('/')[-1].split('?')[0]
-                        debug_logger.debug(f"Processing album ID: {album_id}")
-                        
-                        album_tracks = spotify.album_tracks(album_id)
-                        if include_popular_tracks:
-                            debug_logger.debug(f"Finding most popular track for album {album_id}")
-                            # Find most popular track
-                            most_popular = None
-                            highest_popularity = -1
-                            for track in album_tracks['items']:
-                                track_info = spotify.track(track['id'])
-                                popularity = track_info.get('popularity', 0)
-                                debug_logger.debug(f"Track {track['name']} popularity: {popularity}")
-                                if popularity > highest_popularity:
-                                    highest_popularity = popularity
-                                    most_popular = track
-                            if most_popular:
-                                track_uris.append(most_popular['uri'])
-                                debug_logger.debug(f"Added popular track: {most_popular['name']} (popularity: {highest_popularity}) from album {album_id}")
-                        elif include_all_tracks:
-                            # Add all tracks
-                            album_track_uris = [track['uri'] for track in album_tracks['items']]
-                            track_uris.extend(album_track_uris)
-                            debug_logger.debug(f"Added {len(album_track_uris)} tracks from album {album_id}")
-                        else:
-                            # Default to all tracks if neither option is selected
-                            album_track_uris = [track['uri'] for track in album_tracks['items']]
-                            track_uris.extend(album_track_uris)
-                            debug_logger.debug(f"Added {len(album_track_uris)} tracks (default) from album {album_id}")
-                    except Exception as e:
-                        debug_logger.error(f"Error processing album {album_id}: {str(e)}", exc_info=True)
-                        continue
-                
-                debug_logger.debug(f"Total tracks collected: {len(track_uris)}")
-                # Add tracks in batches of 100
-                if track_uris:
-                    try:
-                        for i in range(0, len(track_uris), 100):
-                            batch = track_uris[i:i+100]
-                            debug_logger.debug(f"Adding batch of {len(batch)} tracks to playlist")
-                            spotify.playlist_add_items(playlist['id'], batch)
-                            debug_logger.debug(f"Successfully added batch to playlist")
-                    except Exception as e:
-                        debug_logger.error(f"Error adding tracks to playlist: {str(e)}", exc_info=True)
-                        raise
-                
-                gui_message(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
-                debug_logger.debug("Playlist creation completed successfully")
-                
-            except Exception as e:
-                debug_logger.error(f"Error in playlist creation thread: {str(e)}", exc_info=True)
-                gui_message(f"Error creating playlist: {str(e)}")
-                return jsonify({'error': str(e)}), 500
+        send_progress(10, "Initializing playlist creation...")
+        playlist_id = await playlist_manager.create_playlist(
+            name=playlist_name,
+            description=playlist_description
+        )
         
-        thread = threading.Thread(target=run_creation)
-        thread.start()
-        debug_logger.debug("Playlist creation thread started")
+        if not playlist_id:
+            return jsonify({'error': 'Failed to create playlist'}), 500
         
-        return jsonify({'message': 'Playlist creation started', 'status': 'processing'})
+        send_progress(30, "Gathering tracks...")
+        tracks_to_add = []
+        total_albums = len(albums)
         
+        for i, album_id in enumerate(albums, 1):
+            album_info = await spotify_manager.get_album_info(album_id)
+            if not album_info:
+                continue
+                
+            album_tracks = album_info.get('tracks', {}).get('items', [])
+            if include_popular_tracks:
+                # Sort tracks by popularity and take the most popular one
+                album_tracks.sort(key=lambda x: x.get('popularity', 0), reverse=True)
+                album_tracks = album_tracks[:1]
+            elif not include_all_tracks:
+                # Take the first track as a default
+                album_tracks = album_tracks[:1]
+                
+            tracks_to_add.extend([track['id'] for track in album_tracks])
+            progress = 30 + (i / total_albums * 40)
+            send_progress(progress, f"Processed album {i} of {total_albums}")
+        
+        if not tracks_to_add:
+            return jsonify({'error': 'No tracks found to add'}), 400
+        
+        send_progress(70, "Adding tracks to playlist...")
+        await playlist_manager.add_tracks_to_playlist(playlist_id, tracks_to_add)
+        
+        send_progress(100, "Playlist created successfully!")
+        return jsonify({
+            'status': 'success',
+            'message': 'Playlist created successfully!',
+            'playlist_id': playlist_id
+        })
+
     except Exception as e:
-        debug_logger.error(f"Error in create-playlist endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/debug-log', methods=['POST'])
@@ -388,6 +336,114 @@ def get_messages():
     while not message_queue.empty():
         messages.append(message_queue.get())
     return jsonify({'messages': messages})
+
+@app.route('/api/playlist-progress')
+def playlist_progress():
+    def generate():
+        while True:
+            try:
+                progress_data = progress_queue.get(timeout=30)  # 30 second timeout
+                yield f"data: {json.dumps(progress_data)}\n\n"
+            except Queue.Empty:
+                # Send a keepalive message
+                yield f"data: {json.dumps({'keepalive': True})}\n\n"
+    
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/scan-webpage', methods=['POST'])
+async def scan_webpage_route():
+    """Handle webpage scanning with GPT"""
+    try:
+        logger.debug("Received scan-webpage request")
+        data = request.get_json()
+        url = data.get('url')
+        
+        if not url:
+            logger.error("No URL provided in request")
+            return jsonify({'error': 'No URL provided'}), 400
+
+        logger.debug(f"Starting GPT scan for URL: {url}")
+        gui_message("Starting GPT scan...")
+        
+        # Create JSON directory if it doesn't exist
+        json_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON"))
+        os.makedirs(json_dir, exist_ok=True)
+        
+        # Default file path
+        destination_file = os.path.normpath(os.path.join(json_dir, "spotscrape_gpt.json"))
+        
+        try:
+            # Reset scan results
+            scan_results['gpt'] = {'status': 'processing', 'albums': [], 'error': None}
+            
+            # Start the scan in a background task
+            def run_scan():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    gui_message("Processing webpage content...")
+                    results = loop.run_until_complete(scan_webpage(url, destination_file))
+                    
+                    # Update scan results
+                    if results:
+                        formatted_albums = []
+                        for album in results:
+                            formatted_albums.append({
+                                'id': album.get('Album ID', ''),
+                                'artist': album.get('Artist', ''),
+                                'name': album.get('Album', ''),
+                                'popularity': album.get('Album Popularity', 0)
+                            })
+                        scan_results['gpt'] = {
+                            'status': 'complete',
+                            'albums': formatted_albums,
+                            'error': None
+                        }
+                        gui_message(f"Found {len(formatted_albums)} albums")
+                    else:
+                        scan_results['gpt'] = {
+                            'status': 'error',
+                            'albums': [],
+                            'error': 'No results found'
+                        }
+                        gui_message("No albums found in the content")
+                    loop.close()
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"Error during GPT scan: {error_msg}", exc_info=True)
+                    scan_results['gpt'] = {
+                        'status': 'error',
+                        'albums': [],
+                        'error': error_msg
+                    }
+                    gui_message(f"Error during scan: {error_msg}")
+
+            # Start scan in a thread
+            thread = threading.Thread(target=run_scan)
+            thread.start()
+            
+            return jsonify({
+                'status': 'processing',
+                'message': 'Scan started'
+            })
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error during GPT scan: {error_msg}", exc_info=True)
+            gui_message(f"Error starting scan: {error_msg}")
+            return jsonify({
+                'status': 'error',
+                'message': f'Error during scan: {error_msg}'
+            }), 500
+            
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in scan-webpage route: {error_msg}", exc_info=True)
+        gui_message(f"Internal server error: {error_msg}")
+        return jsonify({
+            'status': 'error',
+            'message': 'Internal server error'
+        }), 500
 
 def start_server():
     debug_logger.debug("Starting Flask server")

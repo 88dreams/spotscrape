@@ -30,6 +30,8 @@ from asyncio import Lock as AsyncLock
 import aiohttp
 from cachetools import TTLCache
 import re
+import threading
+from tqdm import tqdm
 
 # Suppress specific warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -65,14 +67,25 @@ class ClientManager:
     async def get_openai(cls):
         """Get or create OpenAI client"""
         async with cls._lock:
-            if cls._openai_instance is None:
-                cls._openai_instance = AsyncOpenAI(
-                    api_key=os.getenv('OPENAI_API_KEY'),
-                    timeout=30.0,
-                    max_retries=3,
-                    _strict_response_validation=False
-                )
-            return cls._openai_instance
+            try:
+                if cls._openai_instance is None:
+                    logger.debug("Initializing OpenAI client")
+                    api_key = os.getenv('OPENAI_API_KEY')
+                    if not api_key:
+                        logger.error("OPENAI_API_KEY environment variable not found")
+                        raise Exception("OpenAI API key not found in environment variables")
+                    
+                    logger.debug("Creating AsyncOpenAI client")
+                    cls._openai_instance = AsyncOpenAI(
+                        api_key=api_key,
+                        timeout=30.0,
+                        max_retries=3
+                    )
+                    logger.debug("OpenAI client initialized successfully")
+                return cls._openai_instance
+            except Exception as e:
+                logger.error(f"Error initializing OpenAI client: {str(e)}", exc_info=True)
+                raise
 
     @classmethod
     async def get_session(cls) -> aiohttp.ClientSession:
@@ -90,6 +103,8 @@ class ClientManager:
         if cls._session and not cls._session.closed:
             await cls._session.close()
         cls._session = None
+        cls._openai_instance = None  # Reset OpenAI instance
+        cls._spotify_instance = None  # Reset Spotify instance
 
 class RateLimiter:
     """Improved rate limiter with caching"""
@@ -193,15 +208,57 @@ class PlaylistManager:
         self._lock = AsyncLock()
         self.batch_size = 100
         self._spotify = None
+        self._track_cache = {}  # Cache for track information
+        self.progress_callback = None
+
+    def set_progress_callback(self, callback):
+        """Set the progress callback function"""
+        self.progress_callback = callback
+
+    def _update_progress(self, progress, message):
+        """Update progress if callback is set"""
+        if self.progress_callback:
+            self.progress_callback(progress, message)
 
     async def _get_spotify(self):
         if not self._spotify:
             self._spotify = await ClientManager.get_spotify()
         return self._spotify
 
+    async def _get_tracks_info(self, track_ids: List[str]) -> Dict[str, dict]:
+        """Batch fetch track information with caching"""
+        spotify = await self._get_spotify()
+        result = {}
+        to_fetch = []
+
+        # Check cache first
+        for track_id in track_ids:
+            if track_id in self._track_cache:
+                result[track_id] = self._track_cache[track_id]
+            else:
+                to_fetch.append(track_id)
+
+        # Fetch uncached tracks in batches of 50
+        if to_fetch:
+            for i in range(0, len(to_fetch), 50):
+                batch = to_fetch[i:i + 50]
+                try:
+                    tracks_info = spotify.tracks(batch)
+                    for track in tracks_info['tracks']:
+                        if track:  # Check if track exists
+                            self._track_cache[track['id']] = track
+                            result[track['id']] = track
+                except Exception as e:
+                    logger.error(f"Error fetching track batch {i}-{i+50}: {e}")
+                await asyncio.sleep(0.1)  # Prevent rate limiting
+
+        return result
+
     @RateLimiter(max_calls=100, time_period=60)
     async def create_playlist(self, name: str, description: str = "") -> str:
         """Create a new playlist with rate limiting and caching"""
+        self._update_progress(0, "Creating playlist...")
+        
         try:
             spotify = await self._get_spotify()
             user_id = spotify.current_user()['id']
@@ -213,6 +270,7 @@ class PlaylistManager:
                     public=True,
                     description=description
                 )
+                self._update_progress(100, "Playlist created successfully!")
                 return playlist['id']
         except Exception as e:
             logger.error(f"Error creating playlist '{name}': {e}")
@@ -237,58 +295,80 @@ class PlaylistManager:
             logger.error(f"Error adding tracks to playlist {playlist_id}: {e}")
             raise
 
+    async def add_tracks_to_playlist(self, playlist_id, track_ids):
+        """Add tracks to a playlist"""
+        if not track_ids:
+            return
+        
+        try:
+            # Split track_ids into chunks of 100 (Spotify API limit)
+            chunks = [track_ids[i:i+100] for i in range(0, len(track_ids), 100)]
+            total_chunks = len(chunks)
+            
+            for i, chunk in enumerate(chunks, 1):
+                await self._spotify.playlist_add_items(playlist_id, chunk)
+                progress = (i / total_chunks) * 100
+                self._update_progress(progress, f"Added tracks {i*100}/{len(track_ids)}")
+            
+            self._update_progress(100, "All tracks added successfully!")
+        except Exception as e:
+            logger.error(f"Error adding tracks to playlist: {e}")
+
 class SpotifySearchManager:
     """Handles Spotify search operations with caching"""
     def __init__(self):
-        self._lock = AsyncLock()
-        self._cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
         self._spotify = None
+        self._track_cache = {}
+        self._album_cache = {}
+        self.progress_callback = None
+
+    def set_progress_callback(self, callback):
+        """Set the progress callback function"""
+        self.progress_callback = callback
+
+    def _update_progress(self, progress, message):
+        """Update progress if callback is set"""
+        if self.progress_callback:
+            self.progress_callback(progress, message)
 
     async def _get_spotify(self):
+        """Get or initialize the Spotify client"""
         if not self._spotify:
             self._spotify = await ClientManager.get_spotify()
         return self._spotify
 
-    @RateLimiter(max_calls=100, time_period=60)
-    async def search_album(self, artist: str, album: str) -> Optional[str]:
-        """Search for album with caching and rate limiting"""
-        cache_key = f"{artist}:{album}"
+    async def scan_spotify_links(self, content):
+        """Scan content for Spotify album links and return album IDs"""
+        self._update_progress(0, "Starting Spotify link scan...")
         
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        patterns = [
+            r'https://open\.spotify\.com/album/([a-zA-Z0-9]{22})',
+            r'spotify:album:([a-zA-Z0-9]{22})'
+        ]
+        
+        album_ids = set()
+        for i, pattern in enumerate(patterns):
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                album_ids.add(match.group(1))
+            progress = (i + 1) / len(patterns) * 100
+            self._update_progress(progress, f"Scanning pattern {i + 1} of {len(patterns)}...")
+        
+        return list(album_ids)
 
-        spotify = await self._get_spotify()
+    async def get_album_info(self, album_id):
+        """Get album information from Spotify"""
+        if album_id in self._album_cache:
+            return self._album_cache[album_id]
         
-        # Clean search terms
-        artist = artist.replace('$', 's').replace('/', ' ').strip()
-        album = album.replace('/', ' ').strip()
-        
-        async with self._lock:
-            try:
-                # Try exact search first
-                query = f'album:"{album}" artist:"{artist}"'
-                results = spotify.search(q=query, type='album', limit=1)
-                
-                if results and results['albums']['items']:
-                    album_id = results['albums']['items'][0]['id']
-                    self._cache[cache_key] = album_id
-                    return album_id
-                
-                # Try fuzzy search
-                query = f'"{artist}" "{album}"'
-                results = spotify.search(q=query, type='album', limit=1)
-                
-                if results and results['albums']['items']:
-                    album_id = results['albums']['items'][0]['id']
-                    self._cache[cache_key] = album_id
-                    return album_id
-                
-                self._cache[cache_key] = None
-                return None
-                
-            except Exception as e:
-                logger.error(f"Error searching for album '{album}' by '{artist}': {e}")
-                return None
+        try:
+            spotify = await self._get_spotify()
+            album_info = spotify.album(album_id)
+            self._album_cache[album_id] = album_info
+            return album_info
+        except Exception as e:
+            logger.error(f"Error getting album info: {e}")
+            return None
 
 class WebContentExtractor:
     """Handles web content extraction with improved efficiency"""
@@ -509,71 +589,99 @@ def clean_html_content(content: str) -> str:
         return content
 
 async def process_with_gpt(content: str) -> str:
-    """Process content with GPT with improved content filtering and prompting"""
+    """Process content with GPT to extract artist and album information"""
     try:
-        # Clean the content first
-        cleaned_content = clean_html_content(content)
-        logger.debug(f"Cleaned content sample: {cleaned_content[:500]}")
-        
+        logger.debug("Initializing OpenAI client")
         openai_client = await ClientManager.get_openai()
+        if not openai_client:
+            logger.error("Failed to initialize OpenAI client")
+            raise Exception("Failed to initialize OpenAI client")
+
+        logger.debug("Cleaning content for GPT processing")
+        cleaned_content = clean_html_content(content)
+        if not cleaned_content:
+            logger.error("Content cleaning resulted in empty text")
+            raise Exception("No content to process after cleaning")
+
+        logger.debug(f"Splitting content into chunks (content length: {len(cleaned_content)})")
         chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
+        if not chunks:
+            logger.error("No content chunks created")
+            raise Exception("No content chunks created for processing")
+
+        logger.debug(f"Processing {len(chunks)} chunks with GPT")
         all_results = []
-        
-        system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
-
-        Rules:
-        1. Extract ONLY complete artist-album pairs
-        2. Maintain exact original spelling and capitalization
-        3. Include full albums only (no singles or EPs unless explicitly labeled as albums)
-        4. Ignore any non-music content, advertisements, or navigation elements
-        5. Do not include track listings or song names
-        6. Do not include commentary, reviews, or ratings
-        7. If an artist has multiple albums mentioned, list each pair separately
-
-        Format each pair exactly as: 'Artist - Album'
-        One pair per line
-        No additional text or commentary
-
-        Example output:
-        The Beatles - Abbey Road
-        Pink Floyd - The Dark Side of the Moon"""
         
         for i, chunk in enumerate(chunks, 1):
             try:
+                logger.debug(f"Processing chunk {i}/{len(chunks)}")
+                
+                system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
+
+                Rules:
+                1. Extract ONLY complete artist-album pairs
+                2. Maintain exact original spelling and capitalization
+                3. Include full albums only (no singles or EPs unless explicitly labeled as albums)
+                4. Ignore any non-music content, advertisements, or navigation elements
+                5. Do not include track listings or song names
+                6. Do not include commentary, reviews, or ratings
+                7. If an artist has multiple albums mentioned, list each pair separately
+
+                Format each pair exactly as: 'Artist - Album'
+                One pair per line
+                No additional text or commentary"""
+
                 messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract artist-album pairs from this text. Ignore any non-music content:\n\n{chunk}"}
+                    {"role": "user", "content": f"Extract artist-album pairs from this text:\n\n{chunk}"}
                 ]
-                
+
+                logger.debug("Sending request to OpenAI")
                 response = await openai_client.chat.completions.create(
                     model="gpt-4",
                     messages=messages,
                     temperature=0.1,
                     max_tokens=2000
                 )
-                
+                logger.debug("Received response from OpenAI")
+
+                if not response or not hasattr(response.choices[0], 'message'):
+                    logger.error(f"Invalid response from OpenAI: {response}")
+                    continue
+
                 result = response.choices[0].message.content.strip()
+                logger.debug(f"Raw GPT result: {result}")
+
                 if result:
-                    # Additional filtering of results
                     valid_pairs = []
                     for line in result.split('\n'):
                         line = line.strip()
                         if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
                             valid_pairs.append(line)
                     all_results.extend(valid_pairs)
-                
+                    logger.debug(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
+                else:
+                    logger.warning(f"No results found in chunk {i}")
+
             except Exception as e:
-                logger.error(f"Error processing chunk {i}: {e}")
+                logger.error(f"Error processing chunk {i}: {str(e)}", exc_info=True)
                 continue
-        
+
+        if not all_results:
+            logger.warning("No artist-album pairs found in any chunks")
+            return ""
+
         # Remove duplicates while preserving order
         seen = set()
         final_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
         
-        return '\n'.join(final_results)
+        logger.info(f"Found {len(final_results)} unique artist-album pairs")
+        logger.debug(f"Final results: {final_results}")
         
+        return '\n'.join(final_results)
+
     except Exception as e:
-        logger.error(f"Error in GPT processing: {e}")
+        logger.error(f"Error in process_with_gpt: {str(e)}", exc_info=True)
         raise
 
 class ContentProcessor:
@@ -769,13 +877,13 @@ async def scan_spotify_links(url: str, destination_file: str = None):
         scan_time = datetime.now().isoformat()
         logger.debug(f"Starting scan at: {scan_time}")
 
-        # Extract content
-        logger.debug(f"Extracting content from URL: {url}")
+        # Extract content with progress indicator
+        user_message("\nExtracting webpage content...")
         content = await extractor.extract_content(url)
         logger.debug(f"Content extracted, length: {len(content)} characters")
         
         # Clean HTML content
-        logger.debug("Cleaning HTML content")
+        user_message("Processing webpage content...")
         cleaned_content = clean_html_content(content)
         logger.debug(f"Content cleaned, length: {len(cleaned_content)} characters")
         
@@ -793,45 +901,51 @@ async def scan_spotify_links(url: str, destination_file: str = None):
             r'/album/([a-zA-Z0-9]{22})',  # Simple album ID format
         ]
         
-        # Collect all unique album IDs
+        # Collect all unique album IDs with progress indicator
+        user_message("Scanning for Spotify album links...")
         album_ids = set()
-        for pattern in spotify_patterns:
-            matches = re.finditer(pattern, content, re.IGNORECASE)
-            for match in matches:
-                # Extract the album ID from the capturing group
-                album_id = match.group(1)
-                if album_id and len(album_id) == 22:  # Spotify IDs are 22 characters
-                    album_ids.add(album_id)
-                    logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
+        async with ProgressIndicator(len(spotify_patterns), desc="Scanning patterns", unit="pattern") as pbar:
+            for pattern in spotify_patterns:
+                matches = re.finditer(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    # Extract the album ID from the capturing group
+                    album_id = match.group(1)
+                    if album_id and len(album_id) == 22:  # Spotify IDs are 22 characters
+                        album_ids.add(album_id)
+                        logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
+                pbar.update(1)
 
         user_message(f"\nFound {len(album_ids)} unique Spotify album links")
-        user_message("Processing found albums...")
         
-        # Get Spotify client
+        # Process each album with progress indicator
+        entries = []
         spotify = await ClientManager.get_spotify()
         
-        # Process each album
-        entries = []
-        for album_id in album_ids:
-            try:
-                album_info = spotify.album(album_id)
-                entry = {
-                    'Album ID': album_id,
-                    'Artist': album_info['artists'][0]['name'],
-                    'Album': album_info['name'],
-                    'Album Popularity': album_info.get('popularity', 0),
-                    'Spotify Link': f"spotify:album:{album_id}",
-                    'Scan Time': scan_time
-                }
-                entries.append(entry)
-            except Exception as e:
-                logger.error(f"Error processing album {album_id}: {str(e)}")
-                continue
+        async with ProgressIndicator(len(album_ids), desc="Processing albums", unit="album") as pbar:
+            for album_id in album_ids:
+                try:
+                    album_info = spotify.album(album_id)
+                    entry = {
+                        'Album ID': album_id,
+                        'Artist': album_info['artists'][0]['name'],
+                        'Album': album_info['name'],
+                        'Album Popularity': album_info.get('popularity', 0),
+                        'Spotify Link': f"spotify:album:{album_id}",
+                        'Scan Time': scan_time
+                    }
+                    entries.append(entry)
+                    pbar.set_description(f"Processing: {entry['Artist']} - {entry['Album']}")
+                except Exception as e:
+                    logger.error(f"Error processing album {album_id}: {str(e)}")
+                    continue
+                pbar.update(1)
         
-        # Automatically save results without prompting
-        if destination_file:
+        # Save results
+        if destination_file and entries:
+            user_message("\nSaving results...")
             with open(destination_file, 'w') as f:
                 json.dump(entries, f, indent=4)
+            user_message(f"Saved {len(entries)} entries to {destination_file}")
         
         return entries
         
@@ -846,29 +960,98 @@ async def scan_webpage(url: str, destination_file: str = None):
     """Scan webpage using GPT to extract artist and album data"""
     try:
         # Initialize components
-        logger.debug("Initializing components for GPT scan")
+        user_message("Initializing GPT scan...")
         extractor = WebContentExtractor()
         spotify = await ClientManager.get_spotify()
         
         # Get scan timestamp
         scan_time = datetime.now().isoformat()
-        logger.debug(f"Starting scan at: {scan_time}")
         
         # Extract content
-        logger.debug(f"Extracting content from URL: {url}")
-        content = await extractor.extract_content(url)
-        logger.debug(f"Content extracted, length: {len(content)} characters")
+        user_message("Extracting webpage content...")
+        try:
+            content = await extractor.extract_content(url)
+            user_message(f"Content extracted successfully ({len(content)} characters)")
+        except Exception as e:
+            logger.error(f"Failed to extract content from URL: {e}", exc_info=True)
+            raise Exception(f"Failed to extract content: {str(e)}")
         
         # Process with GPT
-        logger.debug("Processing content with GPT")
-        gpt_results = await process_with_gpt(content)
-        entries_count = len(gpt_results.split('\n'))
-        logger.debug(f"GPT processing complete, found {entries_count} potential entries")
+        user_message("Processing content with GPT...")
+        try:
+            cleaned_content = clean_html_content(content)
+            chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
+            user_message(f"Split content into {len(chunks)} chunks for processing")
+        except Exception as e:
+            logger.error(f"Failed to clean or chunk content: {e}", exc_info=True)
+            raise Exception(f"Failed to process content: {str(e)}")
         
-        # Parse GPT results into artist-album pairs
+        # Process chunks with progress indicator
+        all_results = []
+        for i, chunk in enumerate(chunks, 1):
+            try:
+                openai_client = await ClientManager.get_openai()
+                user_message(f"Processing chunk {i} of {len(chunks)}...")
+                
+                system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
+
+                Rules:
+                1. Extract ONLY complete artist-album pairs
+                2. Maintain exact original spelling and capitalization
+                3. Include full albums only (no singles or EPs unless explicitly labeled as albums)
+                4. Ignore any non-music content, advertisements, or navigation elements
+                5. Do not include track listings or song names
+                6. Do not include commentary, reviews, or ratings
+                7. If an artist has multiple albums mentioned, list each pair separately
+
+                Format each pair exactly as: 'Artist - Album'
+                One pair per line
+                No additional text or commentary"""
+                
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Extract artist-album pairs from this text:\n\n{chunk}"}
+                ]
+                
+                user_message(f"Sending chunk {i} to GPT for processing...")
+                response = await openai_client.chat.completions.create(
+                    model="gpt-4",
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=2000
+                )
+                
+                result = response.choices[0].message.content.strip()
+                if result:
+                    valid_pairs = []
+                    for line in result.split('\n'):
+                        line = line.strip()
+                        if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
+                            valid_pairs.append(line)
+                    all_results.extend(valid_pairs)
+                    user_message(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
+                else:
+                    user_message(f"No valid pairs found in chunk {i}")
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error processing chunk {i}: {error_msg}", exc_info=True)
+                user_message(f"Error processing chunk {i}: {error_msg}")
+                continue
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
+        user_message(f"Found {len(unique_results)} unique artist-album pairs")
+        
+        if not unique_results:
+            user_message("No artist-album pairs found in the content")
+            raise Exception("No artist-album pairs found in the content")
+        
+        # Process each result
         entries = []
-        logger.debug("Starting to process artist-album pairs")
-        for line in gpt_results.split('\n'):
+        user_message("\nSearching Spotify for matches...")
+        for i, line in enumerate(unique_results, 1):
             if ' - ' not in line:
                 continue
                 
@@ -876,183 +1059,204 @@ async def scan_webpage(url: str, destination_file: str = None):
                 artist, album = line.split(' - ', 1)
                 artist = artist.strip()
                 album = album.strip()
-                logger.debug(f"Processing artist-album pair: {artist} - {album}")
+                user_message(f"Searching Spotify ({i}/{len(unique_results)}): {artist} - {album}")
                 
                 # Search for album
                 search_query = f"artist:{artist} album:{album}"
-                logger.debug(f"Searching Spotify with query: {search_query}")
                 results = spotify.search(q=search_query, type='album', limit=1)
                 
                 if results['albums']['items']:
-                    album = results['albums']['items'][0]
-                    album_id = album['id']
-                    logger.debug(f"Found Spotify album ID: {album_id}")
+                    album_info = results['albums']['items'][0]
+                    album_id = album_info['id']
+                    
+                    # Get full album info to get popularity
+                    full_album_info = spotify.album(album_id)
                     
                     entry = {
                         'Album ID': album_id,
-                        'Artist': album['artists'][0]['name'],
-                        'Album': album['name'],
-                        'Album Popularity': album.get('popularity', 0),
+                        'Artist': album_info['artists'][0]['name'],
+                        'Album': album_info['name'],
+                        'Album Popularity': full_album_info.get('popularity', 0),
                         'Spotify Link': f"spotify:album:{album_id}",
                         'Scan Time': scan_time
                     }
                     entries.append(entry)
-                    logger.debug(f"Added entry for {entry['Artist']} - {entry['Album']}")
+                    user_message(f"✓ Found: {entry['Artist']} - {entry['Album']} (Popularity: {entry['Album Popularity']})")
                 else:
-                    logger.warning(f"No Spotify match found for: {artist} - {album}")
+                    user_message(f"✗ No match: {artist} - {album}")
             except Exception as e:
-                logger.error(f"Error processing album {line}: {str(e)}", exc_info=True)
+                error_msg = str(e)
+                logger.error(f"Error processing album {line}: {error_msg}", exc_info=True)
+                user_message(f"Error processing {artist} - {album}: {error_msg}")
                 continue
         
         # Save results
         if destination_file and entries:
-            logger.debug(f"Saving {len(entries)} entries to {destination_file}")
-            with open(destination_file, 'w') as f:
-                json.dump(entries, f, indent=4)
-            logger.debug("File save complete")
+            user_message("\nSaving results...")
+            try:
+                with open(destination_file, 'w') as f:
+                    json.dump(entries, f, indent=4)
+                user_message(f"Successfully saved {len(entries)} entries to file")
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error saving results to file: {error_msg}", exc_info=True)
+                raise Exception(f"Failed to save results: {error_msg}")
         
-        logger.debug(f"Scan complete, found {len(entries)} albums")
         return entries
         
     except Exception as e:
-        logger.error(f"Error in scan_webpage: {str(e)}", exc_info=True)
+        error_msg = str(e)
+        logger.error(f"Error in scan_webpage: {error_msg}", exc_info=True)
+        user_message(f"Error during scan: {error_msg}")
         raise
     finally:
         # Ensure Playwright resources are cleaned up
-        await extractor.cleanup()
+        try:
+            await extractor.cleanup()
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error during cleanup: {error_msg}", exc_info=True)
+            user_message(f"Error during cleanup: {error_msg}")
 
 async def create_playlist(json_file: str, playlist_name: str = None):
-    """Create a Spotify playlist from JSON file"""
-    logger.debug(f"Starting playlist creation from file: {json_file}")
-    playlist_manager = PlaylistManager()
-    file_handler = FileHandler(json_file)
-    
+    """Create a Spotify playlist from a JSON file with improved efficiency"""
     try:
-        # Load and validate JSON data
-        data = await file_handler.load()
-        logger.debug(f"Loaded {len(data) if data else 0} entries from JSON file")
+        # Load JSON data
+        user_message("\nLoading JSON data...")
+        data = FileHandler.load_json(json_file)
         if not data:
-            user_message("No data found in JSON file")
+            user_message("No data found in the JSON file.")
             return
 
-        # Get playlist type
+        # Get user choice for playlist type
         user_message("\nWhat type of playlist would you like to create?")
         user_message("1. All tracks from albums")
         user_message("2. Most popular track from each album (Sampler)")
-        playlist_type = input("Choose (1-2): ").strip()
-        is_sampler = playlist_type == "2"
-        logger.debug(f"User selected playlist type: {'sampler' if is_sampler else 'full'}")
-
-        # Get playlist name
+        choice = input("Enter your choice (1 or 2): ").strip()
+        
+        is_sampler = choice == "2"
+        
+        # Get or generate playlist name
         if not playlist_name:
-            default_name = "SpotScraper Sampler" if is_sampler else "SpotScraper Playlist"
-            default_name += f" {datetime.now().strftime('%Y-%m-%d')}"
-            playlist_name = input(f"\nEnter playlist name (or press Enter for '{default_name}'): ").strip() or default_name
-        logger.debug(f"Using playlist name: {playlist_name}")
+            default_name = f"{'Sampler ' if is_sampler else ''}Playlist {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            playlist_name = input(f"\nEnter playlist name (default: {default_name}): ").strip() or default_name
 
-        # Get playlist description
-        playlist_description = input("\nEnter playlist description (or press Enter for default): ").strip()
-        default_description = (f"Sampler playlist featuring the most popular track from each album" if is_sampler else f"{playlist_name}") + f" - Created on {datetime.now().strftime('%Y-%m-%d')}"
-        description = playlist_description or default_description
-        logger.debug(f"Using playlist description: {description}")
-
-        # Create playlist
-        spotify = await ClientManager.get_spotify()
-        user_id = spotify.current_user()['id']
-        playlist = spotify.user_playlist_create(
-            user=user_id,
-            name=playlist_name,
-            public=True,
-            description=description
-        )
-        playlist_id = playlist['id']
-        logger.debug(f"Created playlist with ID: {playlist_id}")
-
-        # Process albums and collect tracks
+        description = f"{'Sampler playlist' if is_sampler else 'Full playlist'} created by SpotScrape on {datetime.now().strftime('%Y-%m-%d')}"
+        
+        # Initialize managers
+        playlist_manager = PlaylistManager()
         track_uris = []
-        for entry in data:
-            try:
-                logger.debug(f"Processing entry: {entry.get('Artist', 'Unknown')} - {entry.get('Album', 'Unknown')}")
-                
-                # Get album ID from Spotify Link or Album ID
-                album_id = None
-                if spotify_link := entry.get('Spotify Link'):
-                    if 'spotify:album:' in spotify_link:
-                        album_id = spotify_link.split(':')[-1]
-                elif entry_id := entry.get('Album ID'):
-                    album_id = entry_id
-                
+        
+        user_message("\nProcessing albums...")
+        spotify = await ClientManager.get_spotify()
+        
+        # Process albums with progress indicator
+        async with ProgressIndicator(len(data), desc="Processing albums", unit="album") as pbar:
+            for entry in data:
+                album_id = entry.get('Album ID') or entry.get('Spotify Link', '').split(':')[-1]
                 if not album_id:
                     logger.warning(f"No valid album ID found for entry: {entry}")
+                    pbar.update(1)
                     continue
                 
-                logger.debug(f"Processing album ID: {album_id}")
-                
-                # Get album tracks
                 try:
+                    # Get album tracks
                     album_tracks = spotify.album_tracks(album_id)
-                    logger.debug(f"Found {len(album_tracks['items'])} tracks in album")
-                except Exception as e:
-                    logger.error(f"Error getting tracks for album {album_id}: {str(e)}")
-                    continue
-                
-                if is_sampler:
-                    # Find most popular track
-                    most_popular = None
-                    highest_popularity = -1
+                    track_count = len(album_tracks['items'])
+                    pbar.set_description(f"Found {track_count} tracks in current album")
                     
-                    for track in album_tracks['items']:
-                        try:
-                            track_info = spotify.track(track['id'])
-                            popularity = track_info.get('popularity', 0)
-                            logger.debug(f"Track: {track['name']}, Popularity: {popularity}")
-                            
-                            if popularity > highest_popularity:
-                                highest_popularity = popularity
-                                most_popular = track
-                        except Exception as e:
-                            logger.error(f"Error getting track info for {track['id']}: {str(e)}")
-                            continue
-                    
-                    if most_popular:
-                        track_uris.append(most_popular['uri'])
-                        logger.debug(f"Added most popular track: {most_popular['name']} (Popularity: {highest_popularity})")
-                else:
-                    # Add all tracks
-                    album_track_uris = [track['uri'] for track in album_tracks['items']]
-                    track_uris.extend(album_track_uris)
-                    logger.debug(f"Added {len(album_track_uris)} tracks from album")
-            
-            except Exception as e:
-                logger.error(f"Error processing entry {entry}: {str(e)}", exc_info=True)
-                continue
-
-        # Add tracks to playlist
-        unique_track_uris = list(set(track_uris))  # Remove duplicates
-        logger.debug(f"Total unique tracks to add: {len(unique_track_uris)}")
-
-        if unique_track_uris:
-            logger.debug("Starting to add tracks to playlist")
-            # Add tracks in batches of 100
-            for i in range(0, len(unique_track_uris), 100):
-                batch = unique_track_uris[i:i+100]
-                try:
-                    spotify.playlist_add_items(playlist_id, batch)
-                    logger.debug(f"Added batch of {len(batch)} tracks to playlist")
+                    if is_sampler:
+                        # Get all track IDs for batch processing
+                        track_ids = [track['id'] for track in album_tracks['items']]
+                        tracks_info = await playlist_manager._get_tracks_info(track_ids)
+                        
+                        # Find most popular track
+                        most_popular = None
+                        highest_popularity = -1
+                        
+                        for track in album_tracks['items']:
+                            track_info = tracks_info.get(track['id'])
+                            if track_info:
+                                popularity = track_info.get('popularity', 0)
+                                if popularity > highest_popularity:
+                                    highest_popularity = popularity
+                                    most_popular = track
+                        
+                        if most_popular:
+                            track_uris.append(most_popular['uri'])
+                            pbar.set_description(f"Added: {most_popular['name']} (Popularity: {highest_popularity})")
+                    else:
+                        # Add all tracks
+                        album_track_uris = [track['uri'] for track in album_tracks['items']]
+                        track_uris.extend(album_track_uris)
+                        pbar.set_description(f"Added {len(album_track_uris)} tracks from current album")
+                        
                 except Exception as e:
-                    logger.error(f"Error adding batch to playlist: {str(e)}")
+                    logger.error(f"Error processing album {album_id}: {str(e)}")
                     continue
+                finally:
+                    pbar.update(1)
+
+        if not track_uris:
+            user_message("No tracks found to add to playlist.")
+            return
+
+        # Create playlist and add tracks
+        try:
+            user_message("\nCreating playlist...")
+            playlist_id = await playlist_manager.create_playlist(playlist_name, description)
             
-            playlist_type_str = "sampler" if is_sampler else "full"
-            user_message(f"Created {playlist_type_str} playlist '{playlist_name}' with {len(unique_track_uris)} tracks")
-            logger.debug("Playlist creation complete")
-        else:
-            logger.warning("No tracks found to add to playlist")
-            user_message("No tracks found to add to playlist")
+            # Add tracks with progress indicator
+            total_batches = (len(track_uris) + playlist_manager.batch_size - 1) // playlist_manager.batch_size
+            async with ProgressIndicator(total_batches, desc="Adding tracks to playlist", unit="batch") as pbar:
+                for i in range(0, len(track_uris), playlist_manager.batch_size):
+                    batch = track_uris[i:i + playlist_manager.batch_size]
+                    await playlist_manager.add_tracks(playlist_id, batch)
+                    tracks_added = min(i + playlist_manager.batch_size, len(track_uris))
+                    pbar.set_description(f"Added {tracks_added}/{len(track_uris)} tracks")
+                    pbar.update(1)
+            
+            user_message(f"\nSuccessfully created playlist '{playlist_name}' with {len(track_uris)} tracks!")
+            
+        except Exception as e:
+            logger.error(f"Error creating playlist: {str(e)}")
+            user_message(f"Error: {str(e)}")
+            return
 
     except Exception as e:
-        logger.error(f"Error creating playlist: {e}", exc_info=True)
-        raise
+        logger.error(f"Error in create_playlist: {str(e)}")
+        user_message(f"Error: {str(e)}")
+        return
+
+class ProgressIndicator:
+    """Handles progress indication for long-running operations"""
+    def __init__(self, total: int, desc: str = "", unit: str = ""):
+        self.total = total
+        self.desc = desc
+        self.unit = unit
+        self._progress = 0
+        self._lock = threading.Lock()
+        self.pbar = tqdm(total=total, desc=desc, unit=unit)
+
+    def update(self, amount: int = 1):
+        """Update progress by the specified amount"""
+        with self._lock:
+            self._progress += amount
+            self.pbar.update(amount)
+
+    def set_description(self, desc: str):
+        """Update the description of the progress bar"""
+        self.pbar.set_description(desc)
+
+    def close(self):
+        """Close the progress bar"""
+        self.pbar.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 async def main():
     """Main application entry point with improved error handling and user interaction"""
