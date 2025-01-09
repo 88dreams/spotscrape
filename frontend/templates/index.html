@@ -3,95 +3,150 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="SpotScrape - Create Spotify playlists from web content">
     <title>SpotScrape</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link href="/static/css/styles.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
-    <div class="container mx-auto p-4">
+    <main class="container mx-auto p-4">
         <h1 class="text-3xl font-bold text-center mb-4">SpotScrape</h1>
         
         <!-- Search Section -->
-        <section class="card">
-            <h2 class="section-title">Search</h2>
-            <div class="space-y-4">
-                <div class="flex gap-6">
-                    <label class="flex items-center">
+        <section class="card" aria-labelledby="search-section">
+            <h2 id="search-section" class="section-title">Search</h2>
+            <form id="searchForm" class="space-y-4" onsubmit="return false;">
+                <!-- Search Method Selection -->
+                <fieldset class="search-method-group">
+                    <legend class="sr-only">Select Search Method</legend>
+                    <label>
                         <input type="radio" name="searchMethod" value="url" checked>
                         <span class="ml-2">URL Search</span>
                     </label>
-                    <label class="flex items-center">
+                    <label>
                         <input type="radio" name="searchMethod" value="gpt">
                         <span class="ml-2">GPT Search</span>
                     </label>
-                </div>
+                </fieldset>
+
+                <!-- URL Input -->
                 <div class="flex gap-2">
-                    <input type="text" id="urlInput" placeholder="Enter URL" class="input-field">
-                    <button id="searchButton">Search</button>
+                    <input type="url" 
+                           id="urlInput" 
+                           name="url"
+                           required 
+                           pattern="https?://.+" 
+                           placeholder="Enter URL" 
+                           aria-label="Enter URL to search for albums"
+                           class="input-field"
+                           autocomplete="url">
+                    <button type="submit" 
+                            id="searchButton" 
+                            class="button-3d"
+                            aria-label="Start search">Search</button>
                 </div>
-            </div>
+            </form>
         </section>
 
         <!-- Progress Section -->
-        <section id="progressContainer" class="card hidden">
+        <section id="progressContainer" class="card hidden" aria-live="polite">
             <div class="flex justify-between mb-2">
-                <span id="progressText" class="text-gray-600">Processing...</span>
+                <span id="progressText" class="text-gray-600" role="status">Processing...</span>
                 <span id="progressPercent" class="font-semibold">0%</span>
             </div>
-            <div class="progress-bar-container">
+            <div class="progress-bar-container" 
+                 role="progressbar" 
+                 aria-valuemin="0" 
+                 aria-valuemax="100" 
+                 aria-valuenow="0">
                 <div id="progressBar" class="progress-bar"></div>
             </div>
         </section>
 
         <!-- Messages Section -->
-        <section class="card">
-            <h2 class="section-title">Messages</h2>
-            <div id="messages" class="messages-container"></div>
+        <section class="card" aria-labelledby="messages-section">
+            <h2 id="messages-section" class="section-title">Messages</h2>
+            <div id="messages" 
+                 class="messages-container" 
+                 role="log" 
+                 aria-live="polite"
+                 aria-relevant="additions"></div>
         </section>
 
         <!-- Albums Section -->
-        <section class="card">
-            <h2 class="section-title">Albums + Artists</h2>
-            <div id="albumsList" class="albums-grid"></div>
+        <section class="card" aria-labelledby="albums-section">
+            <h2 id="albums-section" class="section-title">Albums + Artists</h2>
+            <div id="albumsList" 
+                 class="albums-grid"
+                 role="grid"
+                 aria-label="Found albums and artists"></div>
         </section>
 
-        <!-- Playlist Section -->
-        <section class="card">
-            <h2 class="section-title">Create Playlist</h2>
-            <div class="space-y-4">
+        <!-- Playlist Creation Section -->
+        <section class="card" aria-labelledby="playlist-section">
+            <h2 id="playlist-section" class="section-title">Create Playlist</h2>
+            <form id="playlistForm" class="space-y-4">
+                <!-- Track Selection Options -->
                 <div class="space-y-2">
                     <div class="flex justify-between">
-                        <label>All Tracks</label>
+                        <label for="allTracksSwitch" class="cursor-pointer">All Tracks</label>
                         <label class="toggle-switch">
-                            <input type="checkbox" id="allTracksSwitch" checked>
-                            <span class="toggle-slider"></span>
+                            <input type="checkbox" 
+                                   id="allTracksSwitch" 
+                                   name="allTracks"
+                                   checked>
+                            <span class="toggle-slider" 
+                                  role="switch" 
+                                  aria-checked="true"></span>
                         </label>
                     </div>
                     <div class="flex justify-between">
-                        <label>Most Popular Track Only</label>
+                        <label for="popularTracksSwitch" class="cursor-pointer">Most Popular Track Only</label>
                         <label class="toggle-switch">
-                            <input type="checkbox" id="popularTracksSwitch">
-                            <span class="toggle-slider"></span>
+                            <input type="checkbox" 
+                                   id="popularTracksSwitch"
+                                   name="popularTracks">
+                            <span class="toggle-slider" 
+                                  role="switch" 
+                                  aria-checked="false"></span>
                         </label>
                     </div>
                 </div>
+
+                <!-- Playlist Details -->
                 <div class="space-y-2">
                     <div>
                         <label for="playlistName">Playlist Name</label>
-                        <input type="text" id="playlistName" placeholder="Enter playlist name" class="input-field">
+                        <input type="text" 
+                               id="playlistName" 
+                               name="playlistName"
+                               placeholder="Enter playlist name" 
+                               class="input-field"
+                               maxlength="100"
+                               required>
                     </div>
                     <div>
                         <label for="playlistDescription">Description</label>
-                        <textarea id="playlistDescription" placeholder="Enter playlist description" class="input-field"></textarea>
+                        <textarea id="playlistDescription" 
+                                  name="playlistDescription"
+                                  placeholder="Enter playlist description" 
+                                  class="input-field"
+                                  maxlength="300"
+                                  rows="3"></textarea>
                     </div>
                 </div>
-                <div class="text-center">
-                    <button id="createPlaylistButton" class="create-button">GO</button>
-                </div>
-            </div>
-        </section>
-    </div>
 
-    <script src="/static/js/app.js"></script>
+                <!-- Submit Button -->
+                <div class="text-center">
+                    <button type="submit" 
+                            id="createPlaylistButton" 
+                            class="button-3d create-button"
+                            aria-label="Create playlist">GO</button>
+                </div>
+            </form>
+        </section>
+    </main>
+
+    <script src="/static/js/app.js" defer></script>
 </body>
 </html> 
