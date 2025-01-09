@@ -1,110 +1,120 @@
 document.addEventListener('DOMContentLoaded', function() {
-    // Debug logging optimization
-    const debugLogQueue = [];
-    let debugLogTimeout = null;
-    const DEBUG_LOG_BATCH_DELAY = 1000; // 1 second batching
-    const DEBUG_LOG_MAX_BATCH = 50; // Maximum logs per batch
-
-    async function flushDebugLogs() {
-        if (debugLogQueue.length === 0) return;
-        
-        const logsToSend = debugLogQueue.splice(0, DEBUG_LOG_MAX_BATCH);
-        try {
-            await fetch('/api/debug-log', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ logs: logsToSend })
-            });
-        } catch (e) {
-            console.error('Debug logging failed:', e);
-            // On failure, add important logs back to queue
-            const importantLogs = logsToSend.filter(log => log.level === 'ERROR' || log.level === 'WARN');
-            debugLogQueue.unshift(...importantLogs);
+    // Constants for configuration
+    const CONFIG = {
+        DEBUG_LOG: {
+            BATCH_DELAY: 1000,
+            MAX_BATCH: 50
+        },
+        MESSAGES: {
+            MAX_COUNT: 50
+        },
+        POLLING: {
+            MIN_DELAY: 1000,
+            MAX_DELAY: 5000,
+            BACKOFF_RATE: 1.5
+        },
+        ENDPOINTS: {
+            DEBUG_LOG: '/api/debug-log',
+            MESSAGES: '/api/messages',
+            SCAN_URL: '/api/scan-url',
+            SCAN_GPT: '/api/scan-webpage',
+            CREATE_PLAYLIST: '/api/create-playlist',
+            GPT_RESULTS: '/api/results-gpt'
         }
-        
-        if (debugLogQueue.length > 0) {
-            // Schedule next batch if there are remaining logs
-            debugLogTimeout = setTimeout(flushDebugLogs, DEBUG_LOG_BATCH_DELAY);
+    };
+
+    // Debug logging optimization with improved batching
+    const debugLogger = {
+        queue: [],
+        timeout: null,
+
+        async flush() {
+            if (this.queue.length === 0) return;
+            
+            const logsToSend = this.queue.splice(0, CONFIG.DEBUG_LOG.MAX_BATCH);
+            try {
+                await fetch(CONFIG.ENDPOINTS.DEBUG_LOG, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ logs: logsToSend })
+                });
+            } catch (e) {
+                console.error('Debug logging failed:', e);
+                const importantLogs = logsToSend.filter(log => 
+                    log.level === 'ERROR' || log.level === 'WARN'
+                );
+                this.queue.unshift(...importantLogs);
+            }
+            
+            if (this.queue.length > 0) {
+                this.scheduleFlush();
+            }
+        },
+
+        scheduleFlush() {
+            if (!this.timeout) {
+                this.timeout = setTimeout(() => {
+                    this.timeout = null;
+                    this.flush();
+                }, CONFIG.DEBUG_LOG.BATCH_DELAY);
+            }
+        },
+
+        log(message, level = 'DEBUG') {
+            this.queue.push({ message, level, timestamp: Date.now() });
+            this.scheduleFlush();
+            
+            if (level === 'ERROR') {
+                console.error(message);
+            }
+        }
+    };
+
+    // Cleanup registry with WeakMap for better memory management
+    const cleanupRegistry = new WeakMap();
+
+    function registerCleanup(target, cleanup) {
+        const cleanups = cleanupRegistry.get(target) || [];
+        cleanups.push(cleanup);
+        cleanupRegistry.set(target, cleanups);
+    }
+
+    function cleanup(target) {
+        const cleanups = cleanupRegistry.get(target);
+        if (cleanups) {
+            cleanups.forEach(fn => fn());
+            cleanupRegistry.delete(target);
         }
     }
 
-    async function debugLog(message, level = 'DEBUG') {
-        debugLogQueue.push({ message, level, timestamp: Date.now() });
-        
-        // Start batch processing if not already scheduled
-        if (!debugLogTimeout) {
-            debugLogTimeout = setTimeout(flushDebugLogs, DEBUG_LOG_BATCH_DELAY);
-        }
-        
-        // Immediately log errors to console
-        if (level === 'ERROR') {
-            console.error(message);
-        }
-    }
+    // Elements cache with validation
+    const elements = {
+        urlInput: document.getElementById('urlInput'),
+        searchButton: document.getElementById('searchButton'),
+        albumsList: document.getElementById('albumsList'),
+        allTracksSwitch: document.getElementById('allTracksSwitch'),
+        popularTracksSwitch: document.getElementById('popularTracksSwitch'),
+        playlistName: document.getElementById('playlistName'),
+        playlistDescription: document.getElementById('playlistDescription'),
+        createPlaylistButton: document.getElementById('createPlaylistButton'),
+        messagesDiv: document.getElementById('messages'),
+        progressContainer: document.getElementById('progressContainer'),
+        progressBar: document.getElementById('progressBar'),
+        progressText: document.getElementById('progressText'),
+        progressPercent: document.getElementById('progressPercent'),
+        searchMethodRadios: document.querySelectorAll('input[name="searchMethod"]')
+    };
 
-    // Cleanup function for event listeners and intervals
-    const cleanupFunctions = new Set();
-
-    function addCleanup(fn) {
-        cleanupFunctions.add(fn);
-    }
-
-    // Safe event listener addition with automatic cleanup
-    function addSafeEventListener(element, event, handler) {
-        element.addEventListener(event, handler);
-        addCleanup(() => element.removeEventListener(event, handler));
-    }
-
-    // Elements
-    const urlInput = document.getElementById('urlInput');
-    const searchButton = document.getElementById('searchButton');
-    const albumsList = document.getElementById('albumsList');
-    const allTracksSwitch = document.getElementById('allTracksSwitch');
-    const popularTracksSwitch = document.getElementById('popularTracksSwitch');
-    const playlistName = document.getElementById('playlistName');
-    const playlistDescription = document.getElementById('playlistDescription');
-    const createPlaylistButton = document.getElementById('createPlaylistButton');
-    const messagesDiv = document.getElementById('messages');
-    const progressContainer = document.getElementById('progressContainer');
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
-    const searchMethodRadios = document.querySelectorAll('input[name="searchMethod"]');
-
-    // Verify elements are found
-    if (!searchButton || !urlInput) {
-        console.error('Critical elements not found:', {
-            searchButton: !!searchButton,
-            urlInput: !!urlInput
+    // Validate critical elements
+    if (!elements.searchButton || !elements.urlInput) {
+        console.error('Critical elements missing:', {
+            searchButton: !!elements.searchButton,
+            urlInput: !!elements.urlInput
         });
         return;
     }
 
-    // Initialize event listeners first
-    function initializeEventListeners() {
-        // Search button click
-        addSafeEventListener(searchButton, 'click', handleSearch);
-        
-        // URL input enter key
-        addSafeEventListener(urlInput, 'keypress', (e) => {
-            if (e.key === 'Enter') {
-                handleSearch();
-            }
-        });
-
-        // Track type switches
-        addSafeEventListener(allTracksSwitch, 'change', handleTrackTypeChange);
-        addSafeEventListener(popularTracksSwitch, 'change', handleTrackTypeChange);
-        
-        // Create playlist button
-        addSafeEventListener(createPlaylistButton, 'click', handleCreatePlaylist);
-
-        // Debug log initialization
-        debugLog('Event listeners initialized', 'INFO');
-    }
-
-    // State management with validation and error boundaries
+    // State management with immutable updates
     const state = {
         currentUrl: '',
         selectedAlbums: new Set(),
@@ -114,30 +124,30 @@ document.addEventListener('DOMContentLoaded', function() {
         
         setUrl(url) {
             this.currentUrl = url;
-            debugLog(`URL updated: ${url}`, 'INFO');
+            debugLogger.log(`URL updated: ${url}`, 'INFO');
         },
         
         addSelectedAlbum(id) {
             if (!id) {
-                debugLog('Attempted to add invalid album ID', 'WARN');
+                debugLogger.log('Attempted to add invalid album ID', 'WARN');
                 return;
             }
             this.selectedAlbums.add(id);
-            debugLog(`Album selected: ${id}`, 'INFO');
+            debugLogger.log(`Album selected: ${id}`, 'INFO');
         },
         
         removeSelectedAlbum(id) {
             if (!id) {
-                debugLog('Attempted to remove invalid album ID', 'WARN');
+                debugLogger.log('Attempted to remove invalid album ID', 'WARN');
                 return;
             }
             this.selectedAlbums.delete(id);
-            debugLog(`Album deselected: ${id}`, 'INFO');
+            debugLogger.log(`Album deselected: ${id}`, 'INFO');
         },
         
         clearSelectedAlbums() {
             this.selectedAlbums.clear();
-            debugLog('Selected albums cleared', 'INFO');
+            debugLogger.log('Selected albums cleared', 'INFO');
         },
 
         setPolling(isPolling) {
@@ -150,7 +160,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         setPlaylistCreationStatus(inProgress) {
             this.playlistCreationInProgress = inProgress;
-            debugLog(`Playlist creation status: ${inProgress}`, 'INFO');
+            debugLogger.log(`Playlist creation status: ${inProgress}`, 'INFO');
         },
 
         getSelectedAlbumsCount() {
@@ -162,438 +172,407 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
-    // Remove redundant state variables
-    const MAX_MESSAGES = 50; // This can stay as a constant
-
-    // Update functions to use state object
-    function resetUI() {
-        state.clearSelectedAlbums();
-        updateAlbumsList([]);
-        playlistName.value = '';
-        playlistDescription.value = '';
-        toggleProgress(false);
-        createPlaylistButton.disabled = false;
-        createPlaylistButton.textContent = 'GO';
-        messagesDiv.innerHTML = '';
-    }
-
-    function toggleProgress(show) {
-        progressContainer.classList.toggle('hidden', !show);
-        if (show) {
-            startMessagePolling();
-        } else {
-            stopMessagePolling();
-        }
-    }
-
-    function startMessagePolling(initialDelay = 1000) {
-        if (state.isPolling) return;
-        state.setPolling(true);
-        let delay = initialDelay;
+    // Template optimization with DocumentFragment
+    const templates = {
+        albumCard: (() => {
+            const template = document.createElement('template');
+            template.innerHTML = `
+                <div class="album-card">
+                    <div class="album-card-inner">
+                        <input type="checkbox" class="album-checkbox" checked>
+                        <img class="album-thumbnail" loading="lazy">
+                        <div class="album-info">
+                            <div class="tooltip-container">
+                                <div class="album-artist font-semibold text-truncate"></div>
+                                <span class="tooltip-text"></span>
+                            </div>
+                            <div class="tooltip-container">
+                                <div class="album-title text-gray-600 text-truncate"></div>
+                                <span class="tooltip-text"></span>
+                            </div>
+                            <div class="text-sm text-gray-500 text-truncate"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            return template;
+        })(),
         
-        async function poll() {
-            if (!state.isPolling) return;
-            
-            try {
-                const response = await fetch('/api/messages');
-                const data = await response.json();
-                if (data.messages && data.messages.length > 0) {
-                    const fragment = document.createDocumentFragment();
-                    data.messages.forEach(message => {
-                        const messageElement = document.createElement('div');
-                        messageElement.className = 'message success mb-2 p-2 rounded';
-                        messageElement.textContent = message;
-                        fragment.appendChild(messageElement);
-                    });
-                    messagesDiv.appendChild(fragment);
-                    messagesDiv.scrollTop = messagesDiv.scrollHeight;
-                    
-                    delay = initialDelay;
-                } else {
-                    delay = Math.min(delay * 1.5, 5000);
+        message: (() => {
+            const template = document.createElement('template');
+            template.innerHTML = `
+                <div class="message mb-2 p-2 rounded"></div>
+            `;
+            return template;
+        })()
+    };
+
+    // UI updates with requestAnimationFrame
+    const ui = {
+        resetUI() {
+            state.clearSelectedAlbums();
+            this.updateAlbumsList([]);
+            elements.playlistName.value = '';
+            elements.playlistDescription.value = '';
+            this.toggleProgress(false);
+            elements.createPlaylistButton.disabled = false;
+            elements.createPlaylistButton.textContent = 'GO';
+            elements.messagesDiv.innerHTML = '';
+        },
+
+        toggleProgress(show) {
+            elements.progressContainer.classList.toggle('hidden', !show);
+            if (show) {
+                this.startMessagePolling();
+            } else {
+                this.stopMessagePolling();
+            }
+        },
+
+        updateProgress(percent, message) {
+            requestAnimationFrame(() => {
+                elements.progressBar.style.width = `${percent}%`;
+                elements.progressText.textContent = message;
+                elements.progressPercent.textContent = `${Math.round(percent)}%`;
+            });
+        },
+
+        addMessage(message, isError = false) {
+            requestAnimationFrame(() => {
+                const messageElement = templates.message.content.cloneNode(true).firstElementChild;
+                messageElement.textContent = message;
+                messageElement.classList.add(isError ? 'error' : 'success');
+                
+                elements.messagesDiv.appendChild(messageElement);
+                elements.messagesDiv.scrollTop = elements.messagesDiv.scrollHeight;
+
+                while (elements.messagesDiv.children.length > CONFIG.MESSAGES.MAX_COUNT) {
+                    elements.messagesDiv.removeChild(elements.messagesDiv.firstChild);
                 }
-            } catch (error) {
-                console.error('Error polling messages:', error);
-                delay = Math.min(delay * 2, 5000);
+            });
+        },
+
+        updateAlbumsList(albums) {
+            if (!albums?.length) {
+                elements.albumsList.innerHTML = '';
+                state.clearSelectedAlbums();
+                return;
             }
 
-            if (state.isPolling) {
-                state.pollMessageTimeout = setTimeout(poll, delay);
-            }
-        }
+            const fragment = document.createDocumentFragment();
+            
+            albums.forEach(album => {
+                const card = templates.albumCard.content.cloneNode(true);
+                const cardElement = card.firstElementChild;
+                const img = cardElement.querySelector('img');
+                const artistDiv = cardElement.querySelector('.album-artist');
+                const artistTooltip = cardElement.querySelector('.album-artist + .tooltip-text');
+                const titleDiv = cardElement.querySelector('.album-title');
+                const titleTooltip = cardElement.querySelector('.album-title + .tooltip-text');
+                const popularityDiv = cardElement.querySelector('.text-sm');
+                const checkbox = cardElement.querySelector('input[type="checkbox"]');
 
-        poll();
-    }
+                img.src = album.images?.[0]?.url || 'https://placehold.co/64x64?text=Album';
+                img.alt = album.name;
+                artistDiv.textContent = album.artist;
+                artistTooltip.textContent = album.artist;
+                titleDiv.textContent = album.name;
+                titleTooltip.textContent = album.name;
+                popularityDiv.textContent = `Popularity: ${album.popularity}`;
 
-    function stopMessagePolling() {
-        state.setPolling(false);
-    }
+                checkbox.addEventListener('change', () => {
+                    if (checkbox.checked) {
+                        state.addSelectedAlbum(album.id);
+                        cardElement.classList.add('selected');
+                    } else {
+                        state.removeSelectedAlbum(album.id);
+                        cardElement.classList.remove('selected');
+                    }
+                });
 
-    // Update handleSearch to use state
-    async function handleSearch() {
-        const url = urlInput.value.trim();
-        if (!url) {
-            addMessage('Please enter a URL', true);
-            return;
-        }
-
-        if (!isValidUrl(url)) {
-            addMessage('Invalid URL', true);
-            searchButton.textContent = 'Reset';
-            searchButton.classList.add('reset');
-            searchButton.onclick = resetSearch;
-            return;
-        }
-
-        state.setUrl(url);
-        resetUI();
-        toggleProgress(true);
-        updateProgress(10, 'Starting search...');
-
-        const searchMethod = document.querySelector('input[name="searchMethod"]:checked').value;
-        const endpoint = searchMethod === 'gpt' ? '/api/scan-webpage' : '/api/scan-url';
-
-        try {
-            updateProgress(20, 'Sending request...');
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ url })
+                state.addSelectedAlbum(album.id);
+                cardElement.classList.add('selected');
+                fragment.appendChild(card);
             });
 
-            if (!response.ok) {
-                throw new Error('Search failed');
-            }
+            requestAnimationFrame(() => {
+                elements.albumsList.innerHTML = '';
+                elements.albumsList.appendChild(fragment);
+            });
+        },
 
-            updateProgress(30, 'Processing response...');
-            const data = await response.json();
-            if (data.error) {
-                throw new Error(data.error);
-            }
-
-            if (searchMethod === 'gpt') {
-                // For GPT search, start polling for results
-                if (data.status === 'processing') {
-                    updateProgress(40, 'GPT processing started...');
-                    pollForResults();
-                }
-            } else {
-                // For URL search, update immediately
-                if (data.albums) {
-                    updateProgress(90, 'Finalizing results...');
-                    updateAlbumsList(data.albums);
-                    updateProgress(100, 'Search completed successfully');
-                    addMessage('Search completed successfully');
-                } else {
-                    throw new Error('No albums found');
-                }
-            }
-
-        } catch (error) {
-            console.error('Search error:', error);
-            addMessage('Error during search: ' + error.message, true);
-            updateAlbumsList([]); // Clear albums list on error
-        } finally {
-            if (searchMethod !== 'gpt') {
-                toggleProgress(false);
-            }
-        }
-    }
-
-    // Function to poll for GPT search results
-    async function pollForResults() {
-        let progressValue = 40;
-        let delay = 1000;
-        let pollTimeout;
-
-        const poll = async () => {
-            try {
-                // Batch progress updates
-                if (progressValue < 90) {
-                    progressValue = Math.min(progressValue + 2, 90);
-                    requestAnimationFrame(() => {
-                        updateProgress(progressValue, 'Processing content...');
-                    });
-                }
+        startMessagePolling(initialDelay = CONFIG.POLLING.MIN_DELAY) {
+            if (state.isPolling) return;
+            state.setPolling(true);
+            let delay = initialDelay;
+            
+            const poll = async () => {
+                if (!state.isPolling) return;
                 
-                const response = await fetch('/api/results-gpt');
-                const data = await response.json();
-                
-                if (data.status === 'complete') {
-                    if (data.albums) {
-                        requestAnimationFrame(() => {
-                            updateProgress(100, 'Search completed successfully');
-                            updateAlbumsList(data.albums);
-                            addMessage('Search completed successfully');
-                            toggleProgress(false);
+                try {
+                    const response = await fetch(CONFIG.ENDPOINTS.MESSAGES);
+                    const data = await response.json();
+                    
+                    if (data.messages?.length > 0) {
+                        const fragment = document.createDocumentFragment();
+                        data.messages.forEach(message => {
+                            const messageElement = templates.message.content.cloneNode(true).firstElementChild;
+                            messageElement.textContent = message;
+                            messageElement.classList.add('success');
+                            fragment.appendChild(messageElement);
                         });
+                        
+                        requestAnimationFrame(() => {
+                            elements.messagesDiv.appendChild(fragment);
+                            elements.messagesDiv.scrollTop = elements.messagesDiv.scrollHeight;
+                        });
+                        
+                        delay = initialDelay;
+                    } else {
+                        delay = Math.min(delay * CONFIG.POLLING.BACKOFF_RATE, CONFIG.POLLING.MAX_DELAY);
+                    }
+                } catch (error) {
+                    console.error('Error polling messages:', error);
+                    delay = Math.min(delay * CONFIG.POLLING.BACKOFF_RATE, CONFIG.POLLING.MAX_DELAY);
+                }
+
+                if (state.isPolling) {
+                    state.pollMessageTimeout = setTimeout(poll, delay);
+                }
+            };
+
+            poll();
+        },
+
+        stopMessagePolling() {
+            state.setPolling(false);
+        }
+    };
+
+    // Event handlers with debouncing and throttling
+    const handlers = {
+        async handleSearch() {
+            const url = elements.urlInput.value.trim();
+            if (!url) {
+                ui.addMessage('Please enter a URL', true);
+                return;
+            }
+
+            if (!this.isValidUrl(url)) {
+                ui.addMessage('Invalid URL', true);
+                elements.searchButton.textContent = 'Reset';
+                elements.searchButton.classList.add('reset');
+                elements.searchButton.onclick = this.resetSearch;
+                return;
+            }
+
+            state.setUrl(url);
+            ui.resetUI();
+            ui.toggleProgress(true);
+            ui.updateProgress(10, 'Starting search...');
+
+            const searchMethod = document.querySelector('input[name="searchMethod"]:checked').value;
+            const endpoint = searchMethod === 'gpt' ? CONFIG.ENDPOINTS.SCAN_GPT : CONFIG.ENDPOINTS.SCAN_URL;
+
+            try {
+                ui.updateProgress(20, 'Sending request...');
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                if (!response.ok) throw new Error('Search failed');
+
+                ui.updateProgress(30, 'Processing response...');
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                if (searchMethod === 'gpt') {
+                    if (data.status === 'processing') {
+                        ui.updateProgress(40, 'GPT processing started...');
+                        this.pollForResults();
+                    }
+                } else {
+                    if (data.albums) {
+                        ui.updateProgress(90, 'Finalizing results...');
+                        ui.updateAlbumsList(data.albums);
+                        ui.updateProgress(100, 'Search completed successfully');
+                        ui.addMessage('Search completed successfully');
                     } else {
                         throw new Error('No albums found');
                     }
-                    return; // Stop polling
-                } else if (data.status === 'error') {
-                    throw new Error(data.error || 'Search failed');
                 }
-                
-                // Continue polling with exponential backoff
-                delay = Math.min(delay * 1.5, 5000);
-                pollTimeout = setTimeout(poll, delay);
-                
             } catch (error) {
-                console.error('Polling error:', error);
-                addMessage('Error during search: ' + error.message, true);
-                updateAlbumsList([]); // Clear albums list on error
-                toggleProgress(false);
-            }
-        };
-
-        // Start polling
-        poll();
-
-        // Cleanup function
-        return () => {
-            if (pollTimeout) {
-                clearTimeout(pollTimeout);
-            }
-        };
-    }
-
-    // Create a template element for album cards (performance optimization)
-    const albumCardTemplate = document.createElement('template');
-    albumCardTemplate.innerHTML = `
-        <div class="album-card">
-            <div class="album-card-inner">
-                <input type="checkbox" class="album-checkbox" checked>
-                <img class="album-thumbnail">
-                <div class="album-info">
-                    <div class="tooltip-container">
-                        <div class="album-artist font-semibold text-truncate"></div>
-                        <span class="tooltip-text"></span>
-                    </div>
-                    <div class="tooltip-container">
-                        <div class="album-title text-gray-600 text-truncate"></div>
-                        <span class="tooltip-text"></span>
-                    </div>
-                    <div class="text-sm text-gray-500 text-truncate"></div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    // Function to update albums list with optimized rendering
-    function updateAlbumsList(albums) {
-        // Clear existing content and selection
-        albumsList.innerHTML = '';
-        state.clearSelectedAlbums();
-
-        if (!albums || albums.length === 0) {
-            return;
-        }
-
-        // Create document fragment for batch DOM update
-        const fragment = document.createDocumentFragment();
-        
-        // Reuse template for each album card
-        albums.forEach(album => {
-            const card = albumCardTemplate.content.cloneNode(true).firstElementChild;
-            const img = card.querySelector('img');
-            const artistDiv = card.querySelector('.album-artist');
-            const artistTooltip = card.querySelector('.album-artist + .tooltip-text');
-            const titleDiv = card.querySelector('.album-title');
-            const titleTooltip = card.querySelector('.album-title + .tooltip-text');
-            const popularityDiv = card.querySelector('.text-sm');
-            const checkbox = card.querySelector('input[type="checkbox"]');
-
-            // Set content
-            img.src = album.images && album.images.length > 0 
-                ? album.images[0].url 
-                : 'https://placehold.co/64x64?text=Album';
-            img.alt = album.name;
-            artistDiv.textContent = album.artist;
-            artistTooltip.textContent = album.artist;
-            titleDiv.textContent = album.name;
-            titleTooltip.textContent = album.name;
-            popularityDiv.textContent = `Popularity: ${album.popularity}`;
-
-            // Add checkbox event listener
-            checkbox.addEventListener('change', () => {
-                if (checkbox.checked) {
-                    state.addSelectedAlbum(album.id);
-                    card.classList.add('selected');
-                } else {
-                    state.removeSelectedAlbum(album.id);
-                    card.classList.remove('selected');
+                console.error('Search error:', error);
+                ui.addMessage('Error during search: ' + error.message, true);
+                ui.updateAlbumsList([]);
+            } finally {
+                if (searchMethod !== 'gpt') {
+                    ui.toggleProgress(false);
                 }
-            });
+            }
+        },
 
-            // Initially select the album
-            state.addSelectedAlbum(album.id);
-            card.classList.add('selected');
+        async pollForResults() {
+            let progressValue = 40;
+            let delay = CONFIG.POLLING.MIN_DELAY;
+            let pollTimeout;
 
-            fragment.appendChild(card);
-        });
+            const poll = async () => {
+                try {
+                    if (progressValue < 90) {
+                        progressValue = Math.min(progressValue + 2, 90);
+                        ui.updateProgress(progressValue, 'Processing content...');
+                    }
+                    
+                    const response = await fetch(CONFIG.ENDPOINTS.GPT_RESULTS);
+                    const data = await response.json();
+                    
+                    if (data.status === 'complete') {
+                        if (data.albums) {
+                            ui.updateProgress(100, 'Search completed successfully');
+                            ui.updateAlbumsList(data.albums);
+                            ui.addMessage('Search completed successfully');
+                            ui.toggleProgress(false);
+                        } else {
+                            throw new Error('No albums found');
+                        }
+                        return;
+                    } else if (data.status === 'error') {
+                        throw new Error(data.error || 'Search failed');
+                    }
+                    
+                    delay = Math.min(delay * CONFIG.POLLING.BACKOFF_RATE, CONFIG.POLLING.MAX_DELAY);
+                    pollTimeout = setTimeout(poll, delay);
+                    
+                } catch (error) {
+                    console.error('Polling error:', error);
+                    ui.addMessage('Error during search: ' + error.message, true);
+                    ui.updateAlbumsList([]);
+                    ui.toggleProgress(false);
+                }
+            };
 
-        // Batch DOM update
-        albumsList.appendChild(fragment);
-    }
+            poll();
+            return () => pollTimeout && clearTimeout(pollTimeout);
+        },
 
-    // Event Listeners
-    searchButton.addEventListener('click', handleSearch);
-    allTracksSwitch.addEventListener('change', handleTrackTypeChange);
-    popularTracksSwitch.addEventListener('change', handleTrackTypeChange);
-    createPlaylistButton.addEventListener('click', handleCreatePlaylist);
+        async handleCreatePlaylist() {
+            if (state.playlistCreationInProgress) return;
 
-    // Function to handle playlist creation
-    async function handleCreatePlaylist() {
-        if (state.playlistCreationInProgress) {
-            return;
-        }
-
-        if (state.getSelectedAlbumsCount() === 0) {
-            addMessage('Please select at least one album', true);
-            return;
-        }
-
-        state.setPlaylistCreationStatus(true);
-        createPlaylistButton.disabled = true;
-        createPlaylistButton.textContent = 'Creating...';
-        toggleProgress(true);
-        updateProgress(0, 'Starting playlist creation...');
-
-        try {
-            const response = await fetch('/api/create-playlist', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    albums: state.getSelectedAlbumsArray(),
-                    playlistName: playlistName.value || getDefaultPlaylistName(),
-                    playlistDescription: playlistDescription.value,
-                    includeAllTracks: allTracksSwitch.checked,
-                    includePopularTracks: popularTracksSwitch.checked
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to create playlist');
+            if (state.getSelectedAlbumsCount() === 0) {
+                ui.addMessage('Please select at least one album', true);
+                return;
             }
 
-            const data = await response.json();
-            if (data.error) {
-                throw new Error(data.error);
-            }
+            state.setPlaylistCreationStatus(true);
+            elements.createPlaylistButton.disabled = true;
+            elements.createPlaylistButton.textContent = 'Creating...';
+            ui.toggleProgress(true);
+            ui.updateProgress(0, 'Starting playlist creation...');
 
-            showCompletionPopup('Playlist created successfully!');
-            addMessage('Playlist created successfully!');
-
-        } catch (error) {
-            console.error('Playlist creation error:', error);
-            addMessage('Error creating playlist: ' + error.message, true);
-            createPlaylistButton.disabled = false;
-            createPlaylistButton.textContent = 'GO';
-        } finally {
-            state.setPlaylistCreationStatus(false);
-            toggleProgress(false);
-        }
-    }
-
-    function handleTrackTypeChange(event) {
-        const isAllTracks = event.target === allTracksSwitch;
-        const otherSwitch = isAllTracks ? popularTracksSwitch : allTracksSwitch;
-        
-        if (event.target.checked) {
-            otherSwitch.checked = false;
-        }
-    }
-
-    function getDefaultPlaylistName() {
-        let domain = 'unknown-domain';
-        try {
-            if (state.currentUrl) {
-                const url = new URL(state.currentUrl);
-                domain = url.hostname.replace('www.', '');
-            }
-        } catch (error) {
-            console.error('Invalid URL:', state.currentUrl);
-        }
-        const date = new Date().toLocaleDateString();
-        const time = new Date().toLocaleTimeString();
-        return `${domain} - ${date} ${time}`;
-    }
-
-    // Add cleanup for all event listeners
-    addSafeEventListener(searchButton, 'click', handleSearch);
-    addSafeEventListener(allTracksSwitch, 'change', handleTrackTypeChange);
-    addSafeEventListener(popularTracksSwitch, 'change', handleTrackTypeChange);
-    addSafeEventListener(createPlaylistButton, 'click', handleCreatePlaylist);
-
-    // Initialize the application
-    initializeEventListeners();
-
-    // Cleanup on page unload
-    window.addEventListener('unload', () => {
-        // Clear all timeouts and intervals
-        if (state.pollMessageTimeout) {
-            clearTimeout(state.pollMessageTimeout);
-        }
-        if (debugLogTimeout) {
-            clearTimeout(debugLogTimeout);
-            // Flush any remaining logs
-            flushDebugLogs();
-        }
-        
-        // Execute all cleanup functions
-        cleanupFunctions.forEach(cleanup => {
             try {
-                cleanup();
-            } catch (e) {
-                console.error('Cleanup error:', e);
+                const response = await fetch(CONFIG.ENDPOINTS.CREATE_PLAYLIST, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        albums: state.getSelectedAlbumsArray(),
+                        playlistName: elements.playlistName.value || this.getDefaultPlaylistName(),
+                        playlistDescription: elements.playlistDescription.value,
+                        includeAllTracks: elements.allTracksSwitch.checked,
+                        includePopularTracks: elements.popularTracksSwitch.checked
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to create playlist');
+
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                this.showCompletionPopup('Playlist created successfully!');
+                ui.addMessage('Playlist created successfully!');
+                elements.createPlaylistButton.disabled = false;
+                elements.createPlaylistButton.textContent = 'GO';
+
+            } catch (error) {
+                console.error('Playlist creation error:', error);
+                ui.addMessage('Error creating playlist: ' + error.message, true);
+                elements.createPlaylistButton.disabled = false;
+                elements.createPlaylistButton.textContent = 'GO';
+            } finally {
+                state.setPlaylistCreationStatus(false);
+                ui.toggleProgress(false);
+            }
+        },
+
+        handleTrackTypeChange(event) {
+            const isAllTracks = event.target === elements.allTracksSwitch;
+            const otherSwitch = isAllTracks ? elements.popularTracksSwitch : elements.allTracksSwitch;
+            
+            if (event.target.checked) {
+                otherSwitch.checked = false;
+            }
+        },
+
+        resetSearch() {
+            elements.urlInput.value = '';
+            elements.searchButton.textContent = 'Search';
+            elements.searchButton.classList.remove('reset');
+            elements.searchButton.onclick = this.handleSearch;
+            elements.messagesDiv.innerHTML = '';
+        },
+
+        isValidUrl(string) {
+            try {
+                new URL(string);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        },
+
+        getDefaultPlaylistName() {
+            let domain = 'unknown-domain';
+            try {
+                if (state.currentUrl) {
+                    const url = new URL(state.currentUrl);
+                    domain = url.hostname.replace('www.', '');
+                }
+            } catch (error) {
+                console.error('Invalid URL:', state.currentUrl);
+            }
+            return `${domain} - ${new Date().toLocaleString()}`;
+        },
+
+        showCompletionPopup(message) {
+            alert(message);
+        }
+    };
+
+    // Event delegation for better performance
+    function initializeEventListeners() {
+        elements.searchButton.addEventListener('click', handlers.handleSearch.bind(handlers));
+        elements.urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handlers.handleSearch.bind(handlers)();
+        });
+        elements.allTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
+        elements.popularTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
+        elements.createPlaylistButton.addEventListener('click', handlers.handleCreatePlaylist.bind(handlers));
+
+        // Register cleanups
+        registerCleanup(window, () => {
+            if (state.pollMessageTimeout) {
+                clearTimeout(state.pollMessageTimeout);
+            }
+            if (debugLogger.timeout) {
+                clearTimeout(debugLogger.timeout);
+                debugLogger.flush();
             }
         });
-    });
-
-    // Function to validate URL
-    function isValidUrl(string) {
-        try {
-            new URL(string);
-            return true;
-        } catch (_) {
-            return false;
-        }
     }
 
-    // Function to reset search
-    function resetSearch() {
-        urlInput.value = '';
-        searchButton.textContent = 'Search';
-        searchButton.classList.remove('reset');
-        searchButton.onclick = handleSearch;
-        messagesDiv.innerHTML = '';
-    }
-
-    // Function to update progress
-    function updateProgress(percent, message) {
-        progressBar.style.width = `${percent}%`;
-        progressText.textContent = message;
-        document.getElementById('progressPercent').textContent = `${Math.round(percent)}%`;
-    }
-
-    // Add message function
-    function addMessage(message, isError = false) {
-        const fragment = document.createDocumentFragment();
-        const messageElement = document.createElement('div');
-        messageElement.className = `message ${isError ? 'error' : 'success'} mb-2 p-2 rounded`;
-        messageElement.textContent = message;
-        fragment.appendChild(messageElement);
-        messagesDiv.appendChild(fragment);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
-        // Cleanup old messages if exceeding maximum
-        while (messagesDiv.children.length > MAX_MESSAGES) {
-            messagesDiv.removeChild(messagesDiv.firstChild);
-        }
-    }
+    // Initialize application
+    initializeEventListeners();
+    debugLogger.log('Application initialized', 'INFO');
 }); 
