@@ -223,12 +223,29 @@ document.addEventListener('DOMContentLoaded', function() {
         albums.forEach(album => {
             const card = document.createElement('div');
             card.className = 'album-card';
+            
+            // Get the album thumbnail URL, fallback to a default if not available
+            const thumbnailUrl = album.images && album.images.length > 0 
+                ? album.images[0].url 
+                : 'https://placehold.co/64x64?text=Album';
+
             card.innerHTML = `
                 <div class="flex items-start">
                     <input type="checkbox" class="mt-1 mr-3" checked>
-                    <div>
-                        <div class="font-semibold">${album.artist}</div>
-                        <div class="text-gray-600">${album.name}</div>
+                    <img src="${thumbnailUrl}" alt="${album.name}" class="album-thumbnail">
+                    <div class="album-info">
+                        <div class="tooltip-container">
+                            <div class="album-artist font-semibold">
+                                ${album.artist}
+                            </div>
+                            <span class="tooltip-text">${album.artist}</span>
+                        </div>
+                        <div class="tooltip-container">
+                            <div class="album-title text-gray-600">
+                                ${album.name}
+                            </div>
+                            <span class="tooltip-text">${album.name}</span>
+                        </div>
                         <div class="text-sm text-gray-500">Popularity: ${album.popularity}</div>
                     </div>
                 </div>

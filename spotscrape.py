@@ -715,7 +715,9 @@ class ContentProcessor:
                         new_entries.append({
                             "Artist": artist.strip(),
                             "Album": album.strip(),
+                            "Album ID": album_id,
                             "Album Popularity": album_popularity,
+                            "Album Images": album_info.get('images', []),
                             "Tracks": tracks,
                             "Spotify Link": f"spotify:album:{album_id}",
                             "Extraction Date": datetime.now().isoformat()
@@ -898,6 +900,7 @@ async def scan_spotify_links(url: str, destination_file: str = None):
                         'Artist': album_info['artists'][0]['name'],
                         'Album': album_info['name'],
                         'Album Popularity': album_info.get('popularity', 0),
+                        'Album Images': album_info.get('images', []),
                         'Spotify Link': f"spotify:album:{album_id}",
                         'Scan Time': scan_time
                     }
@@ -1045,6 +1048,7 @@ async def scan_webpage(url: str, destination_file: str = None):
                         'Artist': album_info['artists'][0]['name'],
                         'Album': album_info['name'],
                         'Album Popularity': full_album_info.get('popularity', 0),
+                        'Album Images': full_album_info.get('images', []),
                         'Spotify Link': f"spotify:album:{album_id}",
                         'Scan Time': scan_time
                     }

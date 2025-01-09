@@ -151,6 +151,7 @@ async def scan_url():
                     'name': album_info.get('name', 'Unknown Album'),
                     'artist': album_info.get('artists', [{'name': 'Unknown Artist'}])[0]['name'],
                     'popularity': album_info.get('popularity', 0),
+                    'images': album_info.get('images', []),
                     'tracks': [
                         {
                             'id': track['id'],
@@ -207,12 +208,21 @@ def scan_gpt():
                         # Format albums for frontend display
                         formatted_albums = []
                         for album in albums_data:
-                            formatted_albums.append({
+                            # Log the album data for debugging
+                            debug_logger.debug(f"Processing album data: {json.dumps(album, indent=2)}")
+                            
+                            album_data = {
                                 'id': album.get('Album ID', ''),
                                 'artist': album.get('Artist', ''),
                                 'name': album.get('Album', ''),
-                                'popularity': album.get('Album Popularity', 0)
-                            })
+                                'popularity': album.get('Album Popularity', 0),
+                                'images': album.get('Album Images', [])
+                            }
+                            # Log the formatted album data
+                            debug_logger.debug(f"Formatted album data: {json.dumps(album_data, indent=2)}")
+                            
+                            formatted_albums.append(album_data)
+                            
                         scan_results['gpt'] = {
                             'status': 'complete',
                             'albums': formatted_albums,
@@ -392,7 +402,8 @@ async def scan_webpage_route():
                                 'id': album.get('Album ID', ''),
                                 'artist': album.get('Artist', ''),
                                 'name': album.get('Album', ''),
-                                'popularity': album.get('Album Popularity', 0)
+                                'popularity': album.get('Album Popularity', 0),
+                                'images': album.get('Album Images', [])
                             })
                         scan_results['gpt'] = {
                             'status': 'complete',

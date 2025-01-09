@@ -97,7 +97,8 @@ input:checked + .toggle-slider:before {
     border-radius: 0.5rem;
     padding: 1rem;
     transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-    height: 100px;
+    height: auto;
+    min-height: 120px;
     margin-bottom: 10px;
     background-color: white;
 }
@@ -110,6 +111,59 @@ input:checked + .toggle-slider:before {
 .album-card.selected {
     border-color: #3b82f6;
     background-color: #eff6ff;
+}
+
+.album-card .album-info {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+}
+
+.album-card .album-title,
+.album-card .album-artist {
+    position: relative;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Tooltip styles */
+.tooltip-container {
+    position: relative;
+    display: inline-block;
+    width: 100%;
+}
+
+.tooltip-text {
+    visibility: hidden;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    text-align: center;
+    padding: 5px 10px;
+    border-radius: 4px;
+    position: absolute;
+    z-index: 1000;
+    bottom: 125%;
+    left: 0;
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-size: 0.875rem;
+    white-space: normal;
+    word-wrap: break-word;
+    max-width: 200px;
+}
+
+.tooltip-container:hover .tooltip-text {
+    visibility: visible;
+    opacity: 1;
+}
+
+.album-card .album-thumbnail {
+    width: 64px;
+    height: 64px;
+    margin-right: 1rem;
+    border-radius: 4px;
+    object-fit: cover;
 }
 
 /* Album list */
