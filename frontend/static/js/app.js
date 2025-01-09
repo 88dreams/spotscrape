@@ -108,11 +108,41 @@ document.addEventListener('DOMContentLoaded', function() {
     // Start polling for messages every second
     setInterval(pollMessages, 1000);
 
+    // Function to validate URL
+    function isValidUrl(string) {
+        try {
+            new URL(string);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // Function to reset search
+    function resetSearch() {
+        urlInput.value = '';
+        searchButton.textContent = 'Search';
+        searchButton.classList.remove('reset');
+        searchButton.onclick = handleSearch;
+        // Clear any existing messages
+        while (messagesDiv.firstChild) {
+            messagesDiv.removeChild(messagesDiv.firstChild);
+        }
+    }
+
     // Function to handle search
     async function handleSearch() {
         const url = urlInput.value.trim();
         if (!url) {
-            alert('Please enter a URL');
+            addMessage('Please enter a URL', true);
+            return;
+        }
+
+        if (!isValidUrl(url)) {
+            addMessage('Invalid URL', true);
+            searchButton.textContent = 'Reset';
+            searchButton.classList.add('reset');
+            searchButton.onclick = resetSearch;
             return;
         }
 
