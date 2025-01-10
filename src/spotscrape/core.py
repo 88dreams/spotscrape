@@ -735,10 +735,11 @@ async def process_with_gpt(content: str) -> str:
                 5. Do not include track listings or song names
                 6. Do not include commentary, reviews, or ratings
                 7. If an artist has multiple albums mentioned, list each pair separately
+                8. Do not add any additional formatting or punctuation to artist or album names
 
-                Format each pair exactly as: 'Artist - Album'
+                Format each pair exactly as: Artist - Album
                 One pair per line
-                No additional text or commentary"""
+                No additional text, commentary, or punctuation"""
 
                 messages = [
                     {"role": "system", "content": system_prompt},
@@ -749,7 +750,7 @@ async def process_with_gpt(content: str) -> str:
                 response = await openai_client.chat.completions.create(
                     model="gpt-4",
                     messages=messages,
-                    temperature=0.1,
+                    temperature=0.0,  # Set to 0 for maximum consistency
                     max_tokens=2000
                 )
                 gpt_logger.debug("Received response from OpenAI")
@@ -759,16 +760,20 @@ async def process_with_gpt(content: str) -> str:
                     continue
 
                 result = response.choices[0].message.content.strip()
-                # Ensure result is properly encoded
-                result = result.encode('utf-8', errors='ignore').decode('utf-8')
+                # Clean any potential leading/trailing quotes or apostrophes
+                result = result.strip("'\"")
                 gpt_logger.debug(f"Raw GPT result: {result}")
 
                 if result:
                     valid_pairs = []
                     for line in result.split('\n'):
-                        line = line.strip()
+                        line = line.strip().strip("'\"")  # Clean any quotes/apostrophes
                         if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
-                            valid_pairs.append(line)
+                            artist, album = line.split(' - ', 1)
+                            # Clean any potential quotes or apostrophes from artist and album names
+                            artist = artist.strip().strip("'\"")
+                            album = album.strip().strip("'\"")
+                            valid_pairs.append(f"{artist} - {album}")
                     all_results.extend(valid_pairs)
                     gpt_logger.debug(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
                 else:
