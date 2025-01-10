@@ -575,7 +575,7 @@ class WebContentExtractor:
 
 def get_next_log_number() -> int:
     """Get the next available log file number (0-9) with improved efficiency"""
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logfiles")
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     os.makedirs(log_dir, exist_ok=True)
     
     # Use list comprehension for better performance
@@ -593,62 +593,58 @@ def get_next_log_number() -> int:
     return next(i for i in range(10) if i not in used_numbers)
 
 def setup_logging():
-    """Set up logging with improved configuration"""
-    log_dir = os.path.normpath(os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 
-        "logfiles"
-    ))
+    """Set up logging with enhanced configuration"""
+    # Get the executable's directory or current directory
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Create logs directory if it doesn't exist
+    log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
-    log_number = get_next_log_number()
-    log_file = os.path.normpath(os.path.join(log_dir, f"spotscraper{log_number}.log"))
-    
-    # Delete the existing log file if it exists
-    if os.path.exists(log_file):
-        os.remove(log_file)
-
     # Create formatters
     detailed_formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
-    simple_formatter = logging.Formatter('%(message)s')
+    simple_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
     
-    try:
-        # Set up file handler
-        file_handler = RotatingFileHandler(
-            log_file,
-            mode='w',  # Open the file in write mode to overwrite
-            maxBytes=10*1024*1024,  # 10MB
-            backupCount=5,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(detailed_formatter)
-        
-        # Set up console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
-        console_handler.setFormatter(simple_formatter)
-        
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(logging.DEBUG)
-        root_logger.handlers.clear()
-        root_logger.addHandler(file_handler)
-        root_logger.addHandler(console_handler)
-        
-        # Get module loggers
-        logger = logging.getLogger(__name__)
-        spotify_logger = logging.getLogger('spotify')
-        
-        print(f"Logging to file: {log_file}")  # Inform user before logger is set up
-        # user_message(f"Logging to file: {log_file}")  # Use this after logger is set up
-        
-        return logger, spotify_logger
-        
-    except Exception as e:
-        print(f"Error setting up logging: {str(e)}")
-        raise
+    # Setup main logger
+    logger = logging.getLogger('spot-main')
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    main_handler = RotatingFileHandler(
+        os.path.join(log_dir, f"spot-main-{datetime.now().strftime('%Y%m%d')}.log"),
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    main_handler.setFormatter(simple_formatter)
+    logger.addHandler(main_handler)
+    
+    # Setup Spotify logger
+    spotify_logger = logging.getLogger('spotify')
+    spotify_logger.setLevel(logging.DEBUG)
+    spotify_logger.propagate = False
+    spotify_handler = RotatingFileHandler(
+        os.path.join(log_dir, f"spot-spotify-{datetime.now().strftime('%Y%m%d')}.log"),
+        maxBytes=10*1024*1024,
+        backupCount=5,
+        encoding='utf-8'
+    )
+    spotify_handler.setFormatter(detailed_formatter)
+    spotify_logger.addHandler(spotify_handler)
+    
+    # Log startup information
+    logger.info("=== Starting new session ===")
+    spotify_logger.info("=== Starting new session ===")
+    
+    return logger, spotify_logger
 
 def user_message(msg: str, log_only: bool = False):
     """Log a user-facing message with improved formatting"""
@@ -695,31 +691,39 @@ def clean_html_content(content: str) -> str:
 
 async def process_with_gpt(content: str) -> str:
     """Process content with GPT to extract artist and album information"""
+    gpt_logger = logging.getLogger('spot-gpt')
     try:
-        logger.debug("Initializing OpenAI client")
+        gpt_logger.debug("Initializing OpenAI client")
         openai_client = await ClientManager.get_openai()
         if not openai_client:
-            logger.error("Failed to initialize OpenAI client")
+            gpt_logger.error("Failed to initialize OpenAI client")
             raise Exception("Failed to initialize OpenAI client")
 
-        logger.debug("Cleaning content for GPT processing")
+        gpt_logger.debug("Cleaning content for GPT processing")
         cleaned_content = clean_html_content(content)
         if not cleaned_content:
-            logger.error("Content cleaning resulted in empty text")
+            gpt_logger.error("Content cleaning resulted in empty text")
             raise Exception("No content to process after cleaning")
 
-        logger.debug(f"Splitting content into chunks (content length: {len(cleaned_content)})")
+        # Ensure content is properly encoded
+        cleaned_content = cleaned_content.encode('utf-8', errors='ignore').decode('utf-8')
+        gpt_logger.debug(f"Content encoded successfully. Length: {len(cleaned_content)}")
+
+        gpt_logger.debug(f"Splitting content into chunks (content length: {len(cleaned_content)})")
         chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
         if not chunks:
-            logger.error("No content chunks created")
+            gpt_logger.error("No content chunks created")
             raise Exception("No content chunks created for processing")
 
-        logger.debug(f"Processing {len(chunks)} chunks with GPT")
+        gpt_logger.debug(f"Processing {len(chunks)} chunks with GPT")
         all_results = []
         
         for i, chunk in enumerate(chunks, 1):
             try:
-                logger.debug(f"Processing chunk {i}/{len(chunks)}")
+                gpt_logger.debug(f"Processing chunk {i}/{len(chunks)}")
+                
+                # Ensure chunk is properly encoded
+                chunk = chunk.encode('utf-8', errors='ignore').decode('utf-8')
                 
                 system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
 
@@ -741,21 +745,23 @@ async def process_with_gpt(content: str) -> str:
                     {"role": "user", "content": f"Extract artist-album pairs from this text:\n\n{chunk}"}
                 ]
 
-                logger.debug("Sending request to OpenAI")
+                gpt_logger.debug("Sending request to OpenAI")
                 response = await openai_client.chat.completions.create(
                     model="gpt-4",
                     messages=messages,
                     temperature=0.1,
                     max_tokens=2000
                 )
-                logger.debug("Received response from OpenAI")
+                gpt_logger.debug("Received response from OpenAI")
 
                 if not response or not hasattr(response.choices[0], 'message'):
-                    logger.error(f"Invalid response from OpenAI: {response}")
+                    gpt_logger.error(f"Invalid response from OpenAI: {response}")
                     continue
 
                 result = response.choices[0].message.content.strip()
-                logger.debug(f"Raw GPT result: {result}")
+                # Ensure result is properly encoded
+                result = result.encode('utf-8', errors='ignore').decode('utf-8')
+                gpt_logger.debug(f"Raw GPT result: {result}")
 
                 if result:
                     valid_pairs = []
@@ -764,29 +770,31 @@ async def process_with_gpt(content: str) -> str:
                         if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
                             valid_pairs.append(line)
                     all_results.extend(valid_pairs)
-                    logger.debug(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
+                    gpt_logger.debug(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
                 else:
-                    logger.warning(f"No results found in chunk {i}")
+                    gpt_logger.warning(f"No results found in chunk {i}")
 
             except Exception as e:
-                logger.error(f"Error processing chunk {i}: {str(e)}", exc_info=True)
+                gpt_logger.error(f"Error processing chunk {i}: {str(e)}", exc_info=True)
                 continue
 
         if not all_results:
-            logger.warning("No artist-album pairs found in any chunks")
+            gpt_logger.warning("No artist-album pairs found in any chunks")
             return ""
 
         # Remove duplicates while preserving order
         seen = set()
         final_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
         
-        logger.info(f"Found {len(final_results)} unique artist-album pairs")
-        logger.debug(f"Final results: {final_results}")
+        gpt_logger.info(f"Found {len(final_results)} unique artist-album pairs")
+        gpt_logger.debug(f"Final results: {final_results}")
         
-        return '\n'.join(final_results)
+        # Ensure final output is properly encoded
+        final_output = '\n'.join(final_results).encode('utf-8', errors='ignore').decode('utf-8')
+        return final_output
 
     except Exception as e:
-        logger.error(f"Error in process_with_gpt: {str(e)}", exc_info=True)
+        gpt_logger.error(f"Error in process_with_gpt: {str(e)}", exc_info=True)
         raise
 
 class ContentProcessor:
@@ -977,9 +985,16 @@ async def scan_spotify_links(url: str, destination_file: str = None):
     """Scan webpage for Spotify links and add artist and album data to JSON"""
     extractor = WebContentExtractor()
     try:
-        # Initialize file handler
-        file_handler = FileHandler(destination_file)
-
+        # Ensure we're using the correct data directory
+        data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+        os.makedirs(data_dir, exist_ok=True)
+        
+        # If no destination file specified, use default
+        if not destination_file:
+            destination_file = os.path.normpath(os.path.join(data_dir, "spotscrape_url.json"))
+        
+        logger.debug(f"Using destination file: {destination_file}")
+        
         # Get scan timestamp
         scan_time = datetime.now().isoformat()
         logger.debug(f"Starting scan at: {scan_time}")
@@ -1033,27 +1048,30 @@ async def scan_spotify_links(url: str, destination_file: str = None):
                 try:
                     album_info = spotify.album(album_id)
                     entry = {
-                        'Album ID': album_id,
-                        'Artist': album_info['artists'][0]['name'],
-                        'Album': album_info['name'],
-                        'Album Popularity': album_info.get('popularity', 0),
-                        'Album Images': album_info.get('images', []),
-                        'Spotify Link': f"spotify:album:{album_id}",
-                        'Scan Time': scan_time
+                        'id': album_id,
+                        'artist': album_info['artists'][0]['name'],
+                        'name': album_info['name'],
+                        'popularity': album_info.get('popularity', 0),
+                        'images': album_info.get('images', []),
+                        'spotify_url': f"spotify:album:{album_id}",
+                        'source_url': url,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     entries.append(entry)
-                    pbar.set_description(f"Processing: {entry['Artist']} - {entry['Album']}")
+                    pbar.set_description(f"Processing: {entry['artist']} - {entry['name']}")
                 except Exception as e:
                     logger.error(f"Error processing album {album_id}: {str(e)}")
                     continue
                 pbar.update(1)
         
         # Save results
-        if destination_file and entries:
-            user_message("\nSaving results...")
-            with open(destination_file, 'w') as f:
-                json.dump(entries, f, indent=4)
-            user_message(f"Saved {len(entries)} entries to {destination_file}")
+        if entries:
+            try:
+                with open(destination_file, 'w', encoding='utf-8') as f:
+                    json.dump(entries, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved {len(entries)} URL scan results to {destination_file}")
+            except Exception as e:
+                logger.error(f"Error saving URL scan results: {e}")
         
         return entries
         
@@ -1066,88 +1084,92 @@ async def scan_spotify_links(url: str, destination_file: str = None):
 
 async def scan_webpage(url: str, destination_file: str) -> List[Dict[str, Any]]:
     """Scan a webpage for music content using GPT and save results to a file."""
+    gpt_logger = logging.getLogger('spot-gpt')
     try:
-        user_message("Content extraction started...")
+        # Extract content
         web_extractor = WebContentExtractor()
         content = await web_extractor.extract_content(url)
         
         if not content:
-            user_message("No content could be extracted from the webpage")
+            gpt_logger.error("No content could be extracted from the webpage")
             return []
             
-        user_message(f"Content extracted successfully ({len(content)} characters)")
-        user_message("Processing content with GPT...")
+        gpt_logger.info(f"Content extracted successfully ({len(content)} characters)")
         
-        # Split content into chunks
-        chunks = ContentProcessor.split_content(content)
-        user_message(f"Split content into {len(chunks)} chunks for processing")
+        # Process with GPT
+        gpt_results = await process_with_gpt(content)
         
-        all_pairs = []
-        for i, chunk in enumerate(chunks, 1):
-            user_message(f"Processing chunk {i} of {len(chunks)}...")
-            user_message(f"Sending chunk {i} to GPT for processing...")
-            
-            # Process chunk with GPT
-            pairs = await ContentProcessor.process_with_gpt(chunk)
-            
-            if pairs:
-                user_message(f"Found {len(pairs)} valid pairs in chunk {i}")
-                all_pairs.extend(pairs)
-            else:
-                user_message(f"Found 0 valid pairs in chunk {i}")
-        
-        # Remove duplicates while preserving order
-        unique_pairs = []
-        seen = set()
-        for pair in all_pairs:
-            key = (pair['artist'], pair['album'])
-            if key not in seen:
-                seen.add(key)
-                unique_pairs.append(pair)
-        
-        user_message(f"\nFound {len(unique_pairs)} unique artist-album pairs\n")
-        
-        if not unique_pairs:
-            user_message("No valid artist-album pairs found in the content")
+        if not gpt_results:
+            gpt_logger.warning("No results found by GPT")
             return []
-        
-        # Search Spotify for each pair
-        user_message("\nSearching Spotify for matches...")
+            
+        # Process each result with Spotify
         spotify_manager = SpotifySearchManager()
         results = []
-        not_found = []
         
-        for i, pair in enumerate(unique_pairs, 1):
-            user_message(f"Searching Spotify ({i}/{len(unique_pairs)}): '{pair['artist']} - {pair['album']}'")
-            album_info = await spotify_manager.search_album(pair['artist'], pair['album'])
+        # Split the GPT results into individual pairs
+        pairs = [pair.strip() for pair in gpt_results.split('\n') if pair.strip()]
+        
+        for pair in pairs:
+            if ' - ' not in pair:
+                continue
+                
+            artist, album = pair.split(' - ', 1)
+            artist = artist.strip()
+            album = album.strip()
             
-            if album_info:
-                user_message(f"✓ Found: {album_info['Artist']} - {album_info['Album']} (Popularity: {album_info['Album Popularity']})")
-                results.append(album_info)
-            else:
-                user_message(f"✗ No match: \"{pair['artist']} - {pair['album']}\"")
-                not_found.append(f"{pair['artist']} - {pair['album']}")
+            try:
+                # Search for the album on Spotify
+                spotify = await ClientManager.get_spotify()
+                search_result = spotify.search(f"album:{album} artist:{artist}", type='album', limit=1)
+                
+                if search_result and search_result['albums']['items']:
+                    album_info = search_result['albums']['items'][0]
+                    album_id = album_info['id']
+                    
+                    # Get full album details
+                    full_album_info = spotify.album(album_id)
+                    
+                    formatted_album = {
+                        'id': album_id,
+                        'artist': artist,
+                        'name': album,
+                        'popularity': full_album_info.get('popularity', 0),
+                        'images': full_album_info.get('images', []),
+                        'spotify_url': f"spotify:album:{album_id}",
+                        'source_url': url,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    results.append(formatted_album)
+                    gpt_logger.info(f"Found album: {artist} - {album}")
+            except Exception as e:
+                gpt_logger.error(f"Error processing album {artist} - {album}: {str(e)}")
+                continue
         
         if results:
-            user_message("\nSaving results...")
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(destination_file), exist_ok=True)
-            
             # Save results to file
-            with open(destination_file, 'w', encoding='utf-8') as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
-            
-            user_message(f"Successfully saved {len(results)} entries to file")
-            return results
+            try:
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(destination_file), exist_ok=True)
+                
+                # Write the results to the specified destination file
+                with open(destination_file, 'w', encoding='utf-8') as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+                gpt_logger.info(f"Saved {len(results)} GPT scan results to {destination_file}")
+            except Exception as e:
+                gpt_logger.error(f"Error saving GPT scan results: {e}")
         else:
-            user_message("No matching albums found on Spotify")
-            return []
-            
+            gpt_logger.warning("No albums found to save")
+        
+        # Return the results regardless of whether file save was successful
+        return results
+        
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Error during webpage scan: {error_msg}", exc_info=True)
-        user_message(f"Error during scan: {error_msg}")
+        gpt_logger.error(f"Error during webpage scan: {str(e)}", exc_info=True)
         return []
+    finally:
+        # Clean up resources
+        await web_extractor.cleanup()
 
 async def create_playlist(json_file: str, playlist_name: str = None):
     """Create a Spotify playlist from a JSON file with improved efficiency"""

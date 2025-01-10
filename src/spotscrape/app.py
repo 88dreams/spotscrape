@@ -25,8 +25,20 @@ from jinja2 import FileSystemLoader, Environment
 import atexit
 import time
 
+"""
+File Structure:
+/SpotScrape_data/
+    spotscrape_gpt.json  - Results from GPT scanning
+    spotscrape_url.json  - Results from URL scanning
+/logs/
+    spot-debug-*.log     - Debug logging
+    spot-spotify-*.log   - Spotify operations
+    spot-main-*.log      - Main application flow
+"""
+
 # Configure debug logging
 def setup_debug_logging():
+    """Set up debug logging with enhanced configuration"""
     debug_logger = logging.getLogger('spot-debug')
     debug_logger.setLevel(logging.DEBUG)
     debug_logger.propagate = False  # Prevent propagation to root logger
@@ -37,7 +49,7 @@ def setup_debug_logging():
     else:
         base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Create logfiles directory if it doesn't exist
+    # Create logs directory if it doesn't exist
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
@@ -47,8 +59,10 @@ def setup_debug_logging():
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     
+    # Use simpler timestamp format without milliseconds
     formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'  # Simplified timestamp format
     )
     file_handler.setFormatter(formatter)
     
@@ -249,19 +263,33 @@ async def scan_url():
                 if album_info:
                     formatted_album = {
                         'id': album_info.get('id'),
-                        'name': album_info.get('name'),
                         'artist': album_info.get('artists', [{}])[0].get('name'),
-                        'images': album_info.get('images', []),
+                        'name': album_info.get('name'),
                         'popularity': album_info.get('popularity', 0),
-                        'url': f"https://open.spotify.com/album/{album_id}"
+                        'images': album_info.get('images', []),
+                        'spotify_url': f"https://open.spotify.com/album/{album_id}",
+                        'source_url': url,
+                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     albums.append(formatted_album)
-                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']}")
+                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']} at {formatted_album['timestamp']}")
                 else:
                     debug_logger.warning(f"Could not get info for album ID: {album_id}")
             
             debug_logger.info(f"Successfully retrieved info for {len(albums)} albums")
             
+            # Save results to file
+            data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+            os.makedirs(data_dir, exist_ok=True)
+            url_file = os.path.normpath(os.path.join(data_dir, "spotscrape_url.json"))
+            
+            try:
+                with open(url_file, 'w', encoding='utf-8') as f:
+                    json.dump(albums, f, indent=2, ensure_ascii=False)
+                debug_logger.info(f"Saved {len(albums)} URL scan results to {url_file}")
+            except Exception as e:
+                debug_logger.error(f"Error saving URL scan results: {e}")
+
             # Return success response
             response_data = {
                 'status': 'complete',
@@ -280,25 +308,67 @@ async def scan_url():
         debug_logger.error(error_msg, exc_info=True)
         return jsonify({'status': 'error', 'error': error_msg}), 500
 
+# Add after other logger setups
+def setup_gpt_logging():
+    """Set up GPT logging with enhanced configuration"""
+    gpt_logger = logging.getLogger('spot-gpt')
+    gpt_logger.setLevel(logging.DEBUG)
+    gpt_logger.propagate = False  # Prevent propagation to root logger
+    
+    # Get the executable's directory or current directory
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Create logs directory if it doesn't exist
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Create or overwrite the GPT log file
+    log_path = os.path.join(log_dir, f"spot-gpt-{datetime.now().strftime('%Y%m%d')}.log")
+    
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='ignore')
+    file_handler.setLevel(logging.DEBUG)
+    
+    # Use simpler timestamp format without milliseconds
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+    
+    # Remove any existing handlers
+    for handler in gpt_logger.handlers[:]:
+        gpt_logger.removeHandler(handler)
+    
+    gpt_logger.addHandler(file_handler)
+    gpt_logger.info(f"GPT Log file created at: {log_path}")
+    return gpt_logger
+
+# Initialize GPT logger
+gpt_logger = setup_gpt_logging()
+
+# Update the scan_gpt route to use the GPT logger
 @app.route('/api/scan-gpt', methods=['POST'])
 def scan_gpt():
-    debug_logger.debug("Received scan-gpt request")
+    gpt_logger.debug("Received scan-gpt request")
     try:
         data = request.json
         url = data.get('url')
-        debug_logger.debug(f"Processing URL: {url}")
+        gpt_logger.debug(f"Processing URL: {url}")
         
         if not url:
-            debug_logger.error("No URL provided")
+            gpt_logger.error("No URL provided")
             return jsonify({'error': 'URL is required'}), 400
             
-        # Create JSON directory if it doesn't exist
-        json_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON"))
-        os.makedirs(json_dir, exist_ok=True)
+        # Create SpotScrape_data directory if it doesn't exist
+        data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+        os.makedirs(data_dir, exist_ok=True)
         
-        # Default file path
-        destination_file = os.path.normpath(os.path.join(json_dir, "spotscrape_gpt.json"))
-        debug_logger.debug(f"Using destination file: {destination_file}")
+        # Default file path for GPT scan results
+        destination_file = os.path.normpath(os.path.join(data_dir, "spotscrape_gpt.json"))
+        gpt_logger.debug(f"Using destination file: {destination_file}")
         
         # Reset results
         scan_results['gpt'] = {'status': 'processing', 'albums': [], 'error': None}
@@ -306,75 +376,73 @@ def scan_gpt():
         # Run scan in a separate thread
         def run_scan():
             try:
-                debug_logger.debug("Starting scan in new thread")
+                gpt_logger.debug("Starting scan in new thread")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 
-                # Extract content first
-                web_extractor = WebContentExtractor()
-                content, error = loop.run_until_complete(web_extractor.extract_content(url))
-                
-                if error:
-                    debug_logger.error(f"Content extraction failed: {error}")
-                    scan_results['gpt'] = {
-                        'status': 'error',
-                        'albums': [],
-                        'error': f"Failed to extract content: {error}"
-                    }
-                    return
-                
-                if not content:
-                    debug_logger.error("No content extracted from URL")
-                    scan_results['gpt'] = {
-                        'status': 'error',
-                        'albums': [],
-                        'error': 'No content could be extracted from the URL'
-                    }
-                    return
-                
                 # Process the content
-                loop.run_until_complete(scan_webpage(url, destination_file))
+                results = loop.run_until_complete(scan_webpage(url, destination_file))
                 
-                # Load results from file
-                if os.path.exists(destination_file):
-                    with open(destination_file, 'r') as f:
-                        albums_data = json.load(f)
+                if results:
+                    try:
                         # Format albums for frontend display
                         formatted_albums = []
-                        for album in albums_data:
-                            # Log the album data for debugging
-                            debug_logger.debug(f"Processing album data: {json.dumps(album, indent=2)}")
-                            
-                            album_data = {
-                                'id': album.get('Album ID', ''),
-                                'artist': album.get('Artist', ''),
-                                'name': album.get('Album', ''),
-                                'popularity': album.get('Album Popularity', 0),
-                                'images': album.get('Album Images', [])
-                            }
-                            # Log the formatted album data
-                            debug_logger.debug(f"Formatted album data: {json.dumps(album_data, indent=2)}")
-                            
-                            formatted_albums.append(album_data)
-                            
+                        for album in results:
+                            try:
+                                # Ensure proper encoding of text fields
+                                artist_name = album.get('artist', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                album_name = album.get('name', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                
+                                album_data = {
+                                    'id': album.get('id', ''),
+                                    'artist': artist_name,
+                                    'name': album_name,
+                                    'popularity': album.get('popularity', 0),
+                                    'images': album.get('images', []),
+                                    'spotify_url': album.get('spotify_url', ''),
+                                    'source_url': url,
+                                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                }
+                                formatted_albums.append(album_data)
+                                gpt_logger.debug(f"Formatted album: {artist_name} - {album_name}")
+                            except Exception as e:
+                                gpt_logger.error(f"Error formatting album: {str(e)}")
+                                continue
+                        
+                        # Save formatted results to GPT-specific file
+                        try:
+                            with open(destination_file, 'w', encoding='utf-8', errors='ignore') as f:
+                                json.dump(formatted_albums, f, indent=2, ensure_ascii=False)
+                            gpt_logger.info(f"Saved {len(formatted_albums)} GPT scan results to {destination_file}")
+                        except Exception as e:
+                            gpt_logger.error(f"Error saving GPT scan results: {e}")
+                        
                         scan_results['gpt'] = {
                             'status': 'complete',
                             'albums': formatted_albums,
                             'error': None
                         }
-                        debug_logger.debug(f"Loaded {len(formatted_albums)} albums from file")
+                        gpt_logger.debug(f"Loaded {len(formatted_albums)} albums from file")
                         gui_message(f"Found {len(formatted_albums)} albums")
+                    except Exception as e:
+                        gpt_logger.error(f"Error processing GPT results: {e}")
+                        scan_results['gpt'] = {
+                            'status': 'error',
+                            'albums': [],
+                            'error': f"Error processing results: {str(e)}"
+                        }
                 else:
                     scan_results['gpt'] = {
-                        'status': 'error',
+                        'status': 'complete',
                         'albums': [],
-                        'error': 'No results found'
+                        'error': None
                     }
+                    gpt_logger.warning("No results found")
                 
                 loop.close()
-                debug_logger.debug("Scan completed successfully")
+                gpt_logger.debug("Scan completed successfully")
             except Exception as e:
-                debug_logger.error(f"Error in scan thread: {str(e)}", exc_info=True)
+                gpt_logger.error(f"Error in scan thread: {str(e)}", exc_info=True)
                 scan_results['gpt'] = {
                     'status': 'error',
                     'albums': [],
@@ -383,12 +451,12 @@ def scan_gpt():
         
         thread = threading.Thread(target=run_scan)
         thread.start()
-        debug_logger.debug("Scan thread started")
+        gpt_logger.debug("Scan thread started")
         
         return jsonify({'status': 'processing'})
         
     except Exception as e:
-        debug_logger.error(f"Error in scan-gpt endpoint: {str(e)}", exc_info=True)
+        gpt_logger.error(f"Error in scan-gpt endpoint: {str(e)}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/create-playlist', methods=['POST'])
@@ -566,11 +634,13 @@ async def scan_webpage_route():
             'error': None
         }
         
-        # Create JSON directory if it doesn't exist
-        json_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON")
-        os.makedirs(json_dir, exist_ok=True)
+        # Create SpotScrape_data directory if it doesn't exist
+        data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+        os.makedirs(data_dir, exist_ok=True)
         
-        destination_file = os.path.join(json_dir, "spotscrape_gpt.json")
+        # Default file path for GPT scan results
+        destination_file = os.path.normpath(os.path.join(data_dir, "spotscrape_gpt.json"))
+        debug_logger.debug(f"Using destination file: {destination_file}")
         
         gui_message("Starting GPT scan...")
         gui_message("Initializing content extraction...")
@@ -584,12 +654,12 @@ async def scan_webpage_route():
                 asyncio.set_event_loop(loop)
                 
                 # Run the scan
-                loop.run_until_complete(scan_webpage(url, destination_file))
+                results = loop.run_until_complete(scan_webpage(url, destination_file))
                 
                 # Check if file exists and has content
                 if os.path.exists(destination_file) and os.path.getsize(destination_file) > 0:
                     # Load and format results
-                    with open(destination_file, 'r') as f:
+                    with open(destination_file, 'r', encoding='utf-8') as f:
                         albums_data = json.load(f)
                         formatted_albums = []
                         not_found_albums = []
@@ -597,21 +667,34 @@ async def scan_webpage_route():
                         gui_message(f"\nProcessing {len(albums_data)} albums found in the content...")
                         
                         for i, album in enumerate(albums_data, 1):
-                            # Log the album data for debugging
-                            debug_logger.debug(f"Processing album data: {json.dumps(album, indent=2)}")
-                            
-                            if album.get('Album ID'):  # Album was found on Spotify
-                                album_data = {
-                                    'id': album.get('Album ID', ''),
-                                    'artist': album.get('Artist', ''),
-                                    'name': album.get('Album', ''),
-                                    'popularity': album.get('Album Popularity', 0),
-                                    'images': album.get('Album Images', [])
-                                }
-                                formatted_albums.append(album_data)
-                                gui_message(f"Processed album {i} of {len(albums_data)}: {album.get('Artist')} - {album.get('Album')}")
-                            else:  # Album was not found on Spotify
-                                not_found_albums.append(f"{album.get('Artist')} - {album.get('Album')}")
+                            try:
+                                # Log the album data for debugging
+                                debug_logger.debug(f"Processing album data: {json.dumps(album, indent=2)}")
+                                
+                                if album.get('id'):  # Album was found on Spotify
+                                    # Ensure proper encoding of text fields
+                                    artist_name = album.get('artist', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                    album_name = album.get('name', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                    
+                                    album_data = {
+                                        'id': album.get('id', ''),
+                                        'artist': artist_name,
+                                        'name': album_name,
+                                        'popularity': album.get('popularity', 0),
+                                        'images': album.get('images', []),
+                                        'spotify_url': f"https://open.spotify.com/album/{album.get('id', '')}",
+                                        'source_url': url,
+                                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                                    }
+                                    formatted_albums.append(album_data)
+                                    gui_message(f"Processed album {i} of {len(albums_data)}: {artist_name} - {album_name}")
+                                else:  # Album was not found on Spotify
+                                    artist_name = album.get('artist', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                    album_name = album.get('name', '').encode('utf-8', errors='ignore').decode('utf-8')
+                                    not_found_albums.append(f"{artist_name} - {album_name}")
+                            except Exception as e:
+                                debug_logger.error(f"Error processing album entry: {str(e)}")
+                                continue
                         
                         scan_results['gpt'] = {
                             'status': 'complete',
