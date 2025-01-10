@@ -337,6 +337,7 @@ input:checked + .toggle-slider:before {
     z-index: 1;
     backdrop-filter: blur(10px);
     background: rgba(255, 255, 255, 0.95);
+    cursor: pointer;
 }
 
 .album-card:hover {
@@ -385,6 +386,7 @@ input:checked + .toggle-slider:before {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    padding-right: 2.5rem;
 }
 
 .album-title {
@@ -531,4 +533,43 @@ input:checked + .toggle-slider:before {
     button {
         display: none;
     }
+}
+
+.spotify-play-button {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    width: 32px;
+    height: 32px;
+    background: rgba(29, 185, 84, 0.9);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    opacity: 0.85;
+    transform: scale(1);
+    transition: all var(--transition-fast);
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(29, 185, 84, 0.15);
+    z-index: 2;
+    border: none;
+}
+
+.album-card:hover .spotify-play-button {
+    opacity: 1;
+    background: #1DB954;
+}
+
+.spotify-play-button:hover {
+    transform: scale(1.15);
+    box-shadow: 0 4px 8px rgba(29, 185, 84, 0.25);
+    background: #1ed760;
+}
+
+.spotify-play-button::before {
+    content: '▶';
+    font-size: 1rem;
+    margin-left: 2px;
+    line-height: 1;
 } 

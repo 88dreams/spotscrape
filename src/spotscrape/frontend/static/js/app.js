@@ -194,6 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="album-popularity text-sm"></div>
                 </div>
             </div>
+            <button class="spotify-play-button" aria-label="Open in Spotify"></button>
         </div>
     `;
             return template;
@@ -284,7 +285,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         titleDiv: cardElement.querySelector('.album-title'),
                         titleTooltip: cardElement.querySelector('.album-title + .tooltip-text'),
                         popularityDiv: cardElement.querySelector('.album-popularity.text-sm'),
-                        checkbox: cardElement.querySelector('.album-checkbox')
+                        checkbox: cardElement.querySelector('.album-checkbox'),
+                        playButton: cardElement.querySelector('.spotify-play-button')
                     };
 
                     // Verify all elements exist
@@ -319,6 +321,26 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else {
                             state.removeSelectedAlbum(album.id);
                             cardElement.classList.remove('selected');
+                        }
+                    });
+
+                    // Handle Spotify play button click
+                    const handleSpotifyPlay = (e) => {
+                        e.stopPropagation(); // Prevent checkbox interaction
+                        if (album.spotify_url) {
+                            window.open(album.spotify_url, '_blank');
+                        } else {
+                            this.addMessage('Spotify URL not available for this album', true);
+                        }
+                    };
+
+                    elements.playButton.addEventListener('click', handleSpotifyPlay);
+                    
+                    // Make the entire card clickable for Spotify
+                    cardElement.addEventListener('click', (e) => {
+                        // Don't trigger if clicking checkbox or if target is the checkbox label
+                        if (e.target !== elements.checkbox && !e.target.closest('label')) {
+                            handleSpotifyPlay(e);
                         }
                     });
 
