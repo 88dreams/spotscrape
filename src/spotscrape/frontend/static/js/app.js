@@ -221,6 +221,9 @@ document.addEventListener('DOMContentLoaded', function() {
             elements.createPlaylistButton.disabled = false;
             elements.createPlaylistButton.textContent = 'GO';
             elements.messagesDiv.innerHTML = '';
+            if (elements.toggleSelectAll) {
+                elements.toggleSelectAll.classList.remove('visible');
+            }
             this.updateSelectAllButton(true);
         },
 
@@ -264,6 +267,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (albumsList) {
                     albumsList.innerHTML = '';
                 }
+                // Hide select all button when no albums
+                if (elements.toggleSelectAll) {
+                    elements.toggleSelectAll.classList.remove('visible');
+                }
                 return;
             }
 
@@ -275,6 +282,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const fragment = document.createDocumentFragment();
             albumsList.innerHTML = '';
+
+            // Show select all button when albums are present
+            if (elements.toggleSelectAll) {
+                elements.toggleSelectAll.classList.add('visible');
+            }
 
             albums.forEach(album => {
                 try {

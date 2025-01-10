@@ -415,11 +415,6 @@ input:checked + .toggle-slider:before {
     margin-top: 0.5rem;
 }
 
-.album-popularity::before {
-    content: '🎵';
-    font-size: 1rem;
-}
-
 /* Tooltips */
 .tooltip-container {
     position: relative;
@@ -574,8 +569,9 @@ input:checked + .toggle-slider:before {
     line-height: 1;
 }
 
+/* Select All Button */
 .select-all-button {
-    display: inline-flex;
+    display: none; /* Hidden by default */
     align-items: center;
     gap: 0.5rem;
     padding: 0.5rem 1rem;
@@ -588,6 +584,10 @@ input:checked + .toggle-slider:before {
     cursor: pointer;
     transition: all var(--transition-fast);
     box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+}
+
+.select-all-button.visible {
+    display: inline-flex;
 }
 
 .select-all-button:hover {
