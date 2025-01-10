@@ -1,3 +1,6 @@
+"""
+Core functionality for SpotScrape
+"""
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -33,6 +36,15 @@ import re
 import threading
 from tqdm import tqdm
 
+# Internal imports
+from .utils import setup_logging, user_message
+from .spotify_manager import SpotifySearchManager
+from .web_extractor import WebContentExtractor
+from .content_processor import ContentProcessor
+
+# Initialize logger
+logger = logging.getLogger(__name__)
+
 # Suppress specific warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 urllib3.disable_warnings(urllib3.exceptions.HTTPWarning)
@@ -43,6 +55,60 @@ warnings.filterwarnings("ignore", message=".*Content-Length and Transfer-Encodin
 CACHE_TTL = 3600  # 1 hour cache lifetime
 request_cache = TTLCache(maxsize=100, ttl=CACHE_TTL)
 spotify_cache = TTLCache(maxsize=1000, ttl=CACHE_TTL)
+
+def get_packaged_browser_path():
+    """Get the path to the packaged Playwright browser."""
+    try:
+        if getattr(sys, 'frozen', False):
+            # Running in a PyInstaller bundle
+            base_path = sys._MEIPASS
+            browser_path = os.path.join(base_path, 'playwright')
+            logger.debug(f"Running in PyInstaller bundle. Browser path: {browser_path}")
+            return browser_path
+        else:
+            # Running in normal Python environment
+            if sys.platform.startswith('win'):
+                base_path = os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright')
+                # Look for the specific chromium version directory
+                chromium_dir = None
+                if os.path.exists(base_path):
+                    for item in os.listdir(base_path):
+                        if item.startswith('chromium-'):
+                            chromium_dir = item
+                            break
+                
+                if not chromium_dir:
+                    # Try alternate locations
+                    alt_paths = [
+                        os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright'),
+                        os.path.join(os.getcwd(), 'playwright-browsers'),
+                        os.path.join(os.path.dirname(sys.executable), 'playwright-browsers')
+                    ]
+                    
+                    for alt_path in alt_paths:
+                        if os.path.exists(alt_path):
+                            for item in os.listdir(alt_path):
+                                if item.startswith('chromium-'):
+                                    chromium_dir = item
+                                    base_path = alt_path
+                                    break
+                            if chromium_dir:
+                                break
+                
+                if not chromium_dir:
+                    logger.error("Chromium browser directory not found in any known location")
+                    raise Exception("Chromium browser directory not found. Please run 'playwright install chromium'")
+                
+                browser_path = os.path.join(base_path, chromium_dir)
+                logger.debug(f"Running in development environment. Browser path: {browser_path}")
+                return browser_path
+            else:
+                browser_path = os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright')
+                logger.debug(f"Running in development environment (non-Windows). Browser path: {browser_path}")
+                return browser_path
+    except Exception as e:
+        logger.error(f"Error getting browser path: {str(e)}")
+        raise
 
 class ClientManager:
     """Singleton manager for API clients"""
@@ -354,19 +420,90 @@ class WebContentExtractor:
     async def setup(self):
         """Initialize Playwright resources"""
         if not self._playwright:
-            self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    '--disable-gpu',
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-setuid-sandbox',
-                    '--disable-web-security',
-                    '--disable-features=IsolateOrigins,site-per-process',
-                    '--disable-blink-features=AutomationControlled'
-                ]
-            )
+            try:
+                self._playwright = await async_playwright().start()
+                
+                # Get browser path based on environment
+                if getattr(sys, 'frozen', False):
+                    # Running in PyInstaller bundle
+                    base_path = sys._MEIPASS
+                    executable_path = os.path.join(base_path, 'playwright', 'chrome-win', 'chrome.exe')
+                    logger.debug(f"Using bundled browser at: {executable_path}")
+                else:
+                    # Running in development environment
+                    executable_path = None
+                    if sys.platform.startswith('win'):
+                        # Try to find the browser in various locations
+                        possible_paths = [
+                            os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright'),
+                            os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright'),
+                            os.path.join(os.getcwd(), 'playwright-browsers'),
+                            os.path.join(os.path.dirname(sys.executable), 'playwright-browsers')
+                        ]
+                        
+                        for base_path in possible_paths:
+                            if os.path.exists(base_path):
+                                for item in os.listdir(base_path):
+                                    if item.startswith('chromium-'):
+                                        chrome_exe = os.path.join(base_path, item, 'chrome-win', 'chrome.exe')
+                                        if os.path.exists(chrome_exe):
+                                            executable_path = chrome_exe
+                                            logger.debug(f"Found browser at: {executable_path}")
+                                            break
+                                if executable_path:
+                                    break
+                        
+                        if not executable_path:
+                            # Try to install the browser
+                            logger.info("Browser not found. Installing Chromium...")
+                            import subprocess
+                            try:
+                                subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], 
+                                            check=True, capture_output=True)
+                                logger.info("Chromium installation completed")
+                                
+                                # Try to find the browser again
+                                for base_path in possible_paths:
+                                    if os.path.exists(base_path):
+                                        for item in os.listdir(base_path):
+                                            if item.startswith('chromium-'):
+                                                chrome_exe = os.path.join(base_path, item, 'chrome-win', 'chrome.exe')
+                                                if os.path.exists(chrome_exe):
+                                                    executable_path = chrome_exe
+                                                    logger.debug(f"Found browser after installation at: {executable_path}")
+                                                    break
+                                        if executable_path:
+                                            break
+                            except subprocess.CalledProcessError as e:
+                                logger.error(f"Failed to install Chromium: {e.output.decode() if e.output else str(e)}")
+                                raise
+                
+                if sys.platform.startswith('win') and (not executable_path or not os.path.exists(executable_path)):
+                    raise FileNotFoundError("Browser executable not found or not accessible")
+                
+                logger.debug(f"Launching browser with executable path: {executable_path}")
+                
+                # Launch the browser with appropriate settings
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    executable_path=executable_path if sys.platform.startswith('win') else None,
+                    args=[
+                        '--disable-gpu',
+                        '--no-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-setuid-sandbox',
+                        '--disable-web-security',
+                        '--disable-features=IsolateOrigins,site-per-process',
+                        '--disable-blink-features=AutomationControlled'
+                    ]
+                )
+                logger.debug("Browser launched successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Playwright: {str(e)}")
+                if self._playwright:
+                    await self._playwright.stop()
+                    self._playwright = None
+                raise
 
     async def cleanup(self):
         """Clean up Playwright resources"""
@@ -1423,9 +1560,6 @@ if __name__ == "__main__":
                                 pass
                 
                 # Shutdown async generators and close the loop
-                loop.run_until_complete(loop.shutdown_asyncgens())
-                
-                # Close the proactor event loop properly
                 if hasattr(loop, '_proactor'):
                     loop._proactor.close()
                 loop.close()
