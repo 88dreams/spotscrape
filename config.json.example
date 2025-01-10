@@ -1,10 +1,16 @@
 {
     "spotify": {
-        "client_id": "your_spotify_client_id_here",
-        "client_secret": "your_spotify_client_secret_here",
+        "client_id": "YOUR_SPOTIFY_CLIENT_ID",
+        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
         "redirect_uri": "http://localhost:8888/callback"
     },
     "openai": {
-        "api_key": "your_openai_api_key_here"
+        "api_key": "YOUR_OPENAI_API_KEY"
+    },
+    "app": {
+        "debug": false,
+        "log_level": "INFO",
+        "data_dir": "data",
+        "json_dir": "JSON"
     }
 } 
