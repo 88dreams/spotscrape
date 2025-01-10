@@ -6,62 +6,69 @@ import logging
 from typing import Optional, Tuple
 from bs4 import BeautifulSoup
 from aiohttp import ClientError, ClientTimeout
+from playwright.async_api import async_playwright, TimeoutError
 
 class WebContentExtractor:
     def __init__(self):
         self.logger = logging.getLogger('spot-debug')
-        self.timeout = ClientTimeout(total=30)  # 30 second timeout
+        self.browser = None
+        self.playwright = None
     
-    async def extract_content(self, url: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Extract text content and links from a webpage.
-        Returns a tuple of (content, error_message)
-        """
+    async def get_browser(self):
+        """Initialize and return a browser instance."""
+        if not self.browser:
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(headless=True)
+        return self.browser
+    
+    async def cleanup(self):
+        """Clean up browser resources."""
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
+
+    def user_message(self, message: str):
+        """Log user messages."""
+        self.logger.info(message)
+    
+    async def extract_content(self, url: str) -> str:
+        """Extract content from a webpage."""
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
-                async with session.get(url, allow_redirects=True) as response:
-                    if response.status == 200:
-                        html = await response.text()
-                        soup = BeautifulSoup(html, 'html.parser')
-                        
-                        # Extract all links first
-                        links = []
-                        for a in soup.find_all('a', href=True):
-                            links.append(a['href'])
-                        
-                        # Remove script and style elements
-                        for script in soup(["script", "style"]):
-                            script.decompose()
-                            
-                        # Get text content
-                        text = soup.get_text()
-                        
-                        # Clean up whitespace
-                        lines = (line.strip() for line in text.splitlines())
-                        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                        text = ' '.join(chunk for chunk in chunks if chunk)
-                        
-                        # Combine text and links
-                        full_content = text + "\n" + "\n".join(links)
-                        self.logger.debug(f"Extracted {len(links)} links from page")
-                        return full_content, None
-                    else:
-                        error_msg = f"HTTP {response.status}: {response.reason}"
-                        self.logger.error(f"Failed to fetch URL: {error_msg}")
-                        return None, error_msg
-        except aiohttp.ClientConnectorError as e:
-            error_msg = f"Connection error: Could not connect to {url}"
-            self.logger.error(error_msg)
-            return None, error_msg
-        except aiohttp.InvalidURL:
-            error_msg = f"Invalid URL: {url}"
-            self.logger.error(error_msg)
-            return None, error_msg
-        except aiohttp.ClientTimeout:
-            error_msg = "Request timed out"
-            self.logger.error(error_msg)
-            return None, error_msg
+            browser = await self.get_browser()
+            page = await browser.new_page()
+            
+            try:
+                # Navigate to page and wait for content
+                await page.goto(url)
+                await page.wait_for_selector('body')
+                
+                # Get page content
+                content = await page.content()
+                
+                if not content:
+                    return ""
+                
+                # Parse content
+                soup = BeautifulSoup(content, 'lxml')
+                
+                # Get all text and links
+                text = soup.get_text()
+                links = [a.get('href', '') for a in soup.find_all('a')]
+                
+                # Combine text and links
+                full_content = text + "\n" + "\n".join(links)
+                
+                return full_content
+                
+            finally:
+                await page.close()
+                
         except Exception as e:
-            error_msg = f"Error extracting content: {str(e)}"
-            self.logger.error(error_msg)
-            return None, error_msg 
+            self.logger.error(f"Error extracting content: {e}")
+            return ""
+            
+        finally:
+            await self.cleanup() 

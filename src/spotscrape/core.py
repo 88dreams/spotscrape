@@ -1064,168 +1064,90 @@ async def scan_spotify_links(url: str, destination_file: str = None):
         # Ensure Playwright resources are cleaned up
         await extractor.cleanup()
 
-async def scan_webpage(url: str, destination_file: str = None):
-    """Scan webpage using GPT to extract artist and album data"""
+async def scan_webpage(url: str, destination_file: str) -> List[Dict[str, Any]]:
+    """Scan a webpage for music content using GPT and save results to a file."""
     try:
-        # Initialize components
-        user_message("Initializing GPT scan...")
-        extractor = WebContentExtractor()
-        spotify = await ClientManager.get_spotify()
+        user_message("Content extraction started...")
+        web_extractor = WebContentExtractor()
+        content = await web_extractor.extract_content(url)
         
-        # Get scan timestamp
-        scan_time = datetime.now().isoformat()
-        
-        # Extract content
-        user_message("Extracting webpage content...")
-        try:
-            content = await extractor.extract_content(url)
-            user_message(f"Content extracted successfully ({len(content)} characters)")
-        except Exception as e:
-            logger.error(f"Failed to extract content from URL: {e}", exc_info=True)
-            raise Exception(f"Failed to extract content: {str(e)}")
-        
-        # Process with GPT
+        if not content:
+            user_message("No content could be extracted from the webpage")
+            return []
+            
+        user_message(f"Content extracted successfully ({len(content)} characters)")
         user_message("Processing content with GPT...")
-        try:
-            cleaned_content = clean_html_content(content)
-            chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
-            user_message(f"Split content into {len(chunks)} chunks for processing")
-        except Exception as e:
-            logger.error(f"Failed to clean or chunk content: {e}", exc_info=True)
-            raise Exception(f"Failed to process content: {str(e)}")
         
-        # Process chunks with progress indicator
-        all_results = []
+        # Split content into chunks
+        chunks = ContentProcessor.split_content(content)
+        user_message(f"Split content into {len(chunks)} chunks for processing")
+        
+        all_pairs = []
         for i, chunk in enumerate(chunks, 1):
-            try:
-                openai_client = await ClientManager.get_openai()
-                user_message(f"Processing chunk {i} of {len(chunks)}...")
-                
-                system_prompt = """You are a precise music information extractor. Your task is to identify and extract ONLY artist and album pairs from the provided text.
-
-                Rules:
-                1. Extract ONLY complete artist-album pairs
-                2. Maintain exact original spelling and capitalization
-                3. Include full albums only (no singles or EPs unless explicitly labeled as albums)
-                4. Ignore any non-music content, advertisements, or navigation elements
-                5. Do not include track listings or song names
-                6. Do not include commentary, reviews, or ratings
-                7. If an artist has multiple albums mentioned, list each pair separately
-
-                Format each pair exactly as: 'Artist - Album'
-                One pair per line
-                No additional text or commentary"""
-                
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Extract artist-album pairs from this text:\n\n{chunk}"}
-                ]
-                
-                user_message(f"Sending chunk {i} to GPT for processing...")
-                response = await openai_client.chat.completions.create(
-                    model="gpt-4",
-                    messages=messages,
-                    temperature=0.1,
-                    max_tokens=2000
-                )
-                
-                result = response.choices[0].message.content.strip()
-                if result:
-                    valid_pairs = []
-                    for line in result.split('\n'):
-                        line = line.strip()
-                        if ' - ' in line and not any(x in line.lower() for x in ['ep', 'single', 'remix', 'feat.']):
-                            valid_pairs.append(line)
-                    all_results.extend(valid_pairs)
-                    user_message(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
-                else:
-                    user_message(f"No valid pairs found in chunk {i}")
-                
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Error processing chunk {i}: {error_msg}", exc_info=True)
-                user_message(f"Error processing chunk {i}: {error_msg}")
-                continue
+            user_message(f"Processing chunk {i} of {len(chunks)}...")
+            user_message(f"Sending chunk {i} to GPT for processing...")
+            
+            # Process chunk with GPT
+            pairs = await ContentProcessor.process_with_gpt(chunk)
+            
+            if pairs:
+                user_message(f"Found {len(pairs)} valid pairs in chunk {i}")
+                all_pairs.extend(pairs)
+            else:
+                user_message(f"Found 0 valid pairs in chunk {i}")
         
         # Remove duplicates while preserving order
+        unique_pairs = []
         seen = set()
-        unique_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
-        user_message(f"Found {len(unique_results)} unique artist-album pairs")
+        for pair in all_pairs:
+            key = (pair['artist'], pair['album'])
+            if key not in seen:
+                seen.add(key)
+                unique_pairs.append(pair)
         
-        if not unique_results:
-            user_message("No artist-album pairs found in the content")
-            raise Exception("No artist-album pairs found in the content")
+        user_message(f"\nFound {len(unique_pairs)} unique artist-album pairs\n")
         
-        # Process each result
-        entries = []
+        if not unique_pairs:
+            user_message("No valid artist-album pairs found in the content")
+            return []
+        
+        # Search Spotify for each pair
         user_message("\nSearching Spotify for matches...")
-        for i, line in enumerate(unique_results, 1):
-            if ' - ' not in line:
-                continue
-                
-            try:
-                artist, album = line.split(' - ', 1)
-                artist = artist.strip()
-                album = album.strip()
-                user_message(f"Searching Spotify ({i}/{len(unique_results)}): {artist} - {album}")
-                
-                # Search for album
-                search_query = f"artist:{artist} album:{album}"
-                results = spotify.search(q=search_query, type='album', limit=1)
-                
-                if results['albums']['items']:
-                    album_info = results['albums']['items'][0]
-                    album_id = album_info['id']
-                    
-                    # Get full album info to get popularity
-                    full_album_info = spotify.album(album_id)
-                    
-                    entry = {
-                        'Album ID': album_id,
-                        'Artist': album_info['artists'][0]['name'],
-                        'Album': album_info['name'],
-                        'Album Popularity': full_album_info.get('popularity', 0),
-                        'Album Images': full_album_info.get('images', []),
-                        'Spotify Link': f"spotify:album:{album_id}",
-                        'Scan Time': scan_time
-                    }
-                    entries.append(entry)
-                    user_message(f"✓ Found: {entry['Artist']} - {entry['Album']} (Popularity: {entry['Album Popularity']})")
-                else:
-                    user_message(f"✗ No match: {artist} - {album}")
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Error processing album {line}: {error_msg}", exc_info=True)
-                user_message(f"Error processing {artist} - {album}: {error_msg}")
-                continue
+        spotify_manager = SpotifySearchManager()
+        results = []
+        not_found = []
         
-        # Save results
-        if destination_file and entries:
+        for i, pair in enumerate(unique_pairs, 1):
+            user_message(f"Searching Spotify ({i}/{len(unique_pairs)}): '{pair['artist']} - {pair['album']}'")
+            album_info = await spotify_manager.search_album(pair['artist'], pair['album'])
+            
+            if album_info:
+                user_message(f"✓ Found: {album_info['Artist']} - {album_info['Album']} (Popularity: {album_info['Album Popularity']})")
+                results.append(album_info)
+            else:
+                user_message(f"✗ No match: \"{pair['artist']} - {pair['album']}\"")
+                not_found.append(f"{pair['artist']} - {pair['album']}")
+        
+        if results:
             user_message("\nSaving results...")
-            try:
-                with open(destination_file, 'w') as f:
-                    json.dump(entries, f, indent=4)
-                user_message(f"Successfully saved {len(entries)} entries to file")
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"Error saving results to file: {error_msg}", exc_info=True)
-                raise Exception(f"Failed to save results: {error_msg}")
-        
-        return entries
-        
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(destination_file), exist_ok=True)
+            
+            # Save results to file
+            with open(destination_file, 'w', encoding='utf-8') as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            
+            user_message(f"Successfully saved {len(results)} entries to file")
+            return results
+        else:
+            user_message("No matching albums found on Spotify")
+            return []
+            
     except Exception as e:
         error_msg = str(e)
-        logger.error(f"Error in scan_webpage: {error_msg}", exc_info=True)
+        logger.error(f"Error during webpage scan: {error_msg}", exc_info=True)
         user_message(f"Error during scan: {error_msg}")
-        raise
-    finally:
-        # Ensure Playwright resources are cleaned up
-        try:
-            await extractor.cleanup()
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error during cleanup: {error_msg}", exc_info=True)
-            user_message(f"Error during cleanup: {error_msg}")
+        return []
 
 async def create_playlist(json_file: str, playlist_name: str = None):
     """Create a Spotify playlist from a JSON file with improved efficiency"""

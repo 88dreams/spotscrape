@@ -22,6 +22,8 @@ from spotipy.oauth2 import SpotifyOAuth
 from spotscrape import SpotifySearchManager, PlaylistManager, WebContentExtractor, ContentProcessor
 from functools import wraps
 from jinja2 import FileSystemLoader, Environment
+import atexit
+import time
 
 # Configure debug logging
 def setup_debug_logging():
@@ -172,7 +174,7 @@ async def scan_url():
         
         if not url:
             debug_logger.error("No URL provided in request")
-            return jsonify({'error': 'No URL provided'}), 400
+            return jsonify({'status': 'error', 'error': 'No URL provided'}), 400
             
         debug_logger.info(f"Starting URL scan for: {url}")
         
@@ -180,45 +182,76 @@ async def scan_url():
         web_extractor = WebContentExtractor()
         spotify_manager = SpotifySearchManager()
         
-        # Extract content from URL
-        content, error = await web_extractor.extract_content(url)
-        if error:
-            debug_logger.error(f"Failed to extract content: {error}")
-            return jsonify({'error': f'Failed to extract content: {error}'}), 400
+        try:
+            # Extract content from URL
+            debug_logger.info("Extracting content from URL...")
+            content = await web_extractor.extract_content(url)
             
-        if not content:
-            debug_logger.error(f"Failed to extract content from URL: {url}")
-            return jsonify({'error': 'Failed to extract content from URL'}), 400
-            
-        debug_logger.info("Content extracted successfully, scanning for Spotify links")
-        
-        # Scan for Spotify links
-        album_ids = await spotify_manager.scan_spotify_links(content)
-        
-        if not album_ids:
-            debug_logger.info("No Spotify album links found in content")
-            return jsonify({'message': 'No Spotify album links found', 'albums': []}), 200
-            
-        debug_logger.info(f"Found {len(album_ids)} album links")
-        
-        # Get album info for each ID
-        albums = []
-        for album_id in album_ids:
-            album_info = await spotify_manager.get_album_info(album_id)
-            if album_info:
-                albums.append(album_info)
+            if not content:
+                error_msg = f"Failed to extract content from URL: {url}"
+                debug_logger.error(error_msg)
+                return jsonify({'status': 'error', 'error': error_msg}), 400
                 
-        debug_logger.info(f"Successfully retrieved info for {len(albums)} albums")
-        
-        return jsonify({
-            'message': f'Found {len(albums)} albums',
-            'albums': albums
-        }), 200
-        
+            debug_logger.info(f"Successfully extracted content. Length: {len(content)}")
+            # Log a sample of the content for debugging
+            content_sample = content[:1000] + '...' if len(content) > 1000 else content
+            debug_logger.debug(f"Content sample:\n{content_sample}")
+            
+            # Scan for Spotify links
+            debug_logger.info("Scanning for Spotify links...")
+            album_ids = await spotify_manager.scan_spotify_links(content)
+            
+            if not album_ids:
+                debug_logger.info("No Spotify album links found in content")
+                return jsonify({
+                    'status': 'complete',
+                    'albums': [],
+                    'message': 'No Spotify album links found in the content'
+                })
+            
+            debug_logger.info(f"Found {len(album_ids)} album IDs: {album_ids}")
+            
+            # Get album info for each ID
+            albums = []
+            total = len(album_ids)
+            
+            for i, album_id in enumerate(album_ids, 1):
+                debug_logger.info(f"Getting info for album {i}/{total}, ID: {album_id}")
+                album_info = await spotify_manager.get_album_info(album_id)
+                
+                if album_info:
+                    formatted_album = {
+                        'id': album_info.get('id'),
+                        'name': album_info.get('name'),
+                        'artist': album_info.get('artists', [{}])[0].get('name'),
+                        'images': album_info.get('images', []),
+                        'popularity': album_info.get('popularity', 0),
+                        'url': f"https://open.spotify.com/album/{album_id}"
+                    }
+                    albums.append(formatted_album)
+                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']}")
+                else:
+                    debug_logger.warning(f"Could not get info for album ID: {album_id}")
+            
+            debug_logger.info(f"Successfully retrieved info for {len(albums)} albums")
+            
+            # Return success response
+            response_data = {
+                'status': 'complete',
+                'albums': albums,
+                'message': f'Found {len(albums)} albums'
+            }
+            debug_logger.info("Sending response with albums")
+            return jsonify(response_data)
+            
+        finally:
+            # Ensure we clean up the web extractor
+            await web_extractor.cleanup()
+            
     except Exception as e:
         error_msg = f"Error during URL scan: {str(e)}"
         debug_logger.error(error_msg, exc_info=True)
-        return jsonify({'error': error_msg}), 500
+        return jsonify({'status': 'error', 'error': error_msg}), 500
 
 @app.route('/api/scan-gpt', methods=['POST'])
 def scan_gpt():
@@ -335,6 +368,7 @@ def scan_gpt():
 @async_route
 async def create_playlist():
     """Handle playlist creation with better error handling and progress updates"""
+    spotify_manager = None
     try:
         data = request.json
         album_ids = data.get('albums', [])  # This is now a list of album IDs
@@ -435,6 +469,20 @@ async def create_playlist():
         error_msg = f"Error creating playlist: {str(e)}"
         logger.error(error_msg)
         return jsonify({'error': error_msg}), 500
+    finally:
+        # Clean up Spotify resources
+        if spotify_manager and spotify_manager._spotify_instance:
+            try:
+                spotify_manager._spotify_instance.close()
+                spotify_manager._spotify_instance = None
+            except Exception as e:
+                logger.error(f"Error cleaning up Spotify resources: {e}")
+        # Clear any remaining progress messages
+        while not progress_queue.empty():
+            try:
+                progress_queue.get_nowait()
+            except:
+                pass
 
 @app.route('/api/debug-log', methods=['POST'])
 def debug_log():
@@ -474,61 +522,69 @@ def playlist_progress():
 
 @app.route('/api/scan-webpage', methods=['POST'])
 async def scan_webpage_route():
-    """Handle webpage scanning with GPT"""
     try:
-        logger.debug("Received scan-webpage request")
-        data = request.get_json()
+        data = request.json
         url = data.get('url')
         
         if not url:
-            logger.error("No URL provided in request")
-            return jsonify({'error': 'No URL provided'}), 400
-
-        logger.debug(f"Starting GPT scan for URL: {url}")
-        gui_message("Starting GPT scan...")
+            return jsonify({
+                'status': 'error',
+                'message': 'No URL provided'
+            }), 400
+            
+        # Reset scan results
+        scan_results['gpt'] = {
+            'status': 'processing',
+            'albums': [],
+            'error': None
+        }
         
         # Create JSON directory if it doesn't exist
-        json_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON"))
+        json_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "JSON")
         os.makedirs(json_dir, exist_ok=True)
         
-        # Default file path
-        destination_file = os.path.normpath(os.path.join(json_dir, "spotscrape_gpt.json"))
+        destination_file = os.path.join(json_dir, "spotscrape_gpt.json")
         
-        try:
-            # Reset scan results
-            scan_results['gpt'] = {'status': 'processing', 'albums': [], 'error': None}
-            not_found_albums = []  # Track albums that couldn't be found
-            
-            # Start the scan in a background task
-            def run_scan():
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    # Extract content first
-                    gui_message("Initializing content extraction...")
-                    results = loop.run_until_complete(scan_webpage(url, destination_file))
-                    
-                    if results:
-                        # Format results for frontend
+        gui_message("Starting GPT scan...")
+        gui_message("Initializing content extraction...")
+        gui_message("Initializing GPT scan...")
+        gui_message("Extracting webpage content...")
+        
+        # Start the scan in a background task
+        def run_scan():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Run the scan
+                loop.run_until_complete(scan_webpage(url, destination_file))
+                
+                # Check if file exists and has content
+                if os.path.exists(destination_file) and os.path.getsize(destination_file) > 0:
+                    # Load and format results
+                    with open(destination_file, 'r') as f:
+                        albums_data = json.load(f)
                         formatted_albums = []
-                        total_albums = len(results)
+                        not_found_albums = []
                         
-                        gui_message(f"\nProcessing {total_albums} albums found in the content...")
+                        gui_message(f"\nProcessing {len(albums_data)} albums found in the content...")
                         
-                        for i, album in enumerate(results, 1):
-                            if not album.get('Album ID'):
-                                not_found_albums.append(f"{album.get('Artist', 'Unknown')} - {album.get('Album', 'Unknown')}")
-                                continue
-                                
-                            formatted_albums.append({
-                                'id': album.get('Album ID', ''),
-                                'artist': album.get('Artist', ''),
-                                'name': album.get('Album', ''),
-                                'popularity': album.get('Album Popularity', 0),
-                                'images': album.get('Album Images', [])
-                            })
-                            gui_message(f"Processed album {i} of {total_albums}: {album.get('Artist')} - {album.get('Album')}")
+                        for i, album in enumerate(albums_data, 1):
+                            # Log the album data for debugging
+                            debug_logger.debug(f"Processing album data: {json.dumps(album, indent=2)}")
+                            
+                            if album.get('Album ID'):  # Album was found on Spotify
+                                album_data = {
+                                    'id': album.get('Album ID', ''),
+                                    'artist': album.get('Artist', ''),
+                                    'name': album.get('Album', ''),
+                                    'popularity': album.get('Album Popularity', 0),
+                                    'images': album.get('Album Images', [])
+                                }
+                                formatted_albums.append(album_data)
+                                gui_message(f"Processed album {i} of {len(albums_data)}: {album.get('Artist')} - {album.get('Album')}")
+                            else:  # Album was not found on Spotify
+                                not_found_albums.append(f"{album.get('Artist')} - {album.get('Album')}")
                         
                         scan_results['gpt'] = {
                             'status': 'complete',
@@ -542,44 +598,35 @@ async def scan_webpage_route():
                             gui_message("\nThe following albums could not be found on Spotify:")
                             for album in not_found_albums:
                                 gui_message(f"• {album}")
-                    else:
-                        scan_results['gpt'] = {
-                            'status': 'error',
-                            'albums': [],
-                            'error': 'No results found'
-                        }
-                        gui_message("No albums found in the content")
-                    
-                    loop.close()
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    logger.error(f"Error during GPT scan: {error_msg}", exc_info=True)
+                else:
                     scan_results['gpt'] = {
                         'status': 'error',
                         'albums': [],
-                        'error': error_msg
+                        'error': 'No results found'
                     }
-                    gui_message(f"Error during scan: {error_msg}")
-
-            # Start scan in a thread
-            thread = threading.Thread(target=run_scan)
-            thread.start()
-            
-            return jsonify({
-                'status': 'processing',
-                'message': 'Scan started'
-            })
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error during GPT scan: {error_msg}", exc_info=True)
-            gui_message(f"Error starting scan: {error_msg}")
-            return jsonify({
-                'status': 'error',
-                'message': f'Error during scan: {error_msg}'
-            }), 500
-            
+                    gui_message("No albums found in the content")
+                
+                loop.close()
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Error during GPT scan: {error_msg}", exc_info=True)
+                scan_results['gpt'] = {
+                    'status': 'error',
+                    'albums': [],
+                    'error': error_msg
+                }
+                gui_message(f"Error during scan: {error_msg}")
+        
+        # Start scan in a thread
+        thread = threading.Thread(target=run_scan)
+        thread.start()
+        
+        return jsonify({
+            'status': 'processing',
+            'message': 'Scan started'
+        })
+        
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error in scan-webpage route: {error_msg}", exc_info=True)
@@ -589,28 +636,104 @@ async def scan_webpage_route():
             'message': 'Internal server error'
         }), 500
 
+def force_quit():
+    """Force quit the application and all its processes"""
+    debug_logger.info("Force quitting application...")
+    try:
+        # Get the current process ID
+        pid = os.getpid()
+        debug_logger.info(f"Current process ID: {pid}")
+        
+        # Force kill the process
+        if sys.platform == 'win32':
+            os.system(f'taskkill /F /PID {pid} /T')
+        else:
+            os.kill(pid, signal.SIGKILL)
+    except Exception as e:
+        debug_logger.error(f"Error during force quit: {e}")
+        os._exit(1)
+
+def cleanup_resources():
+    """Clean up function to be called on exit"""
+    debug_logger.info("Cleaning up resources...")
+    try:
+        # Set a timeout for cleanup
+        cleanup_start = time.time()
+        cleanup_timeout = 5  # 5 seconds timeout
+        
+        # Clear message queues
+        while not message_queue.empty():
+            message_queue.get_nowait()
+        while not progress_queue.empty():
+            progress_queue.get_nowait()
+            
+        # Clean up any remaining Spotify instances
+        if hasattr(SpotifySearchManager, '_spotify_instance') and SpotifySearchManager._spotify_instance:
+            try:
+                SpotifySearchManager._spotify_instance.close()
+                SpotifySearchManager._spotify_instance = None
+            except:
+                pass
+                
+        # Kill any remaining threads except main thread
+        for thread in threading.enumerate():
+            if thread != threading.main_thread():
+                try:
+                    thread._stop()
+                except:
+                    pass
+                    
+        # If cleanup takes too long, force quit
+        if time.time() - cleanup_start > cleanup_timeout:
+            debug_logger.warning("Cleanup timeout exceeded, forcing quit...")
+            force_quit()
+            
+    except Exception as e:
+        debug_logger.error(f"Error during cleanup: {e}")
+        force_quit()
+
+def shutdown_server():
+    """Shutdown the Flask server"""
+    debug_logger.info("Shutting down Flask server...")
+    try:
+        func = request.environ.get('werkzeug.server.shutdown')
+        if func is not None:
+            func()
+    except Exception as e:
+        debug_logger.error(f"Error shutting down Flask server: {e}")
+
 def start_server():
+    """Start the Flask server"""
     debug_logger.debug("Starting Flask server")
     app.run(port=5000, threaded=True)
 
 def main():
     """Entry point for the application"""
     try:
+        # Register cleanup function
+        atexit.register(cleanup_resources)
+        
         # Disable debug mode for webview
         webview.WEBVIEW_DEBUG = False
         
         # Handle Ctrl+C gracefully
         def signal_handler(signum, frame):
-            debug_logger.info("Received shutdown signal")
+            debug_logger.info(f"Received shutdown signal: {signum}")
+            cleanup_resources()
             if window:
                 window.destroy()
-            sys.exit(0)
+            shutdown_server()
+            time.sleep(0.5)  # Give a moment for resources to clean up
+            force_quit()
             
-        signal.signal(signal.SIGINT, signal_handler)
+        # Register signal handlers
+        signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+        signal.signal(signal.SIGTERM, signal_handler)  # Termination request
+        if sys.platform == 'win32':
+            signal.signal(signal.SIGBREAK, signal_handler)  # Ctrl+Break on Windows
         
         # Start Flask server in a separate thread
-        t = threading.Thread(target=start_server)
-        t.daemon = True
+        t = threading.Thread(target=start_server, daemon=True)
         t.start()
         debug_logger.debug("Flask server thread started")
         
@@ -623,11 +746,9 @@ def main():
         def on_closed():
             debug_logger.info("Window closed, shutting down")
             try:
-                # Stop the Flask server
-                func = request.environ.get('werkzeug.server.shutdown')
-                if func is not None:
-                    func()
-
+                cleanup_resources()
+                shutdown_server()
+                
                 # Clean up any pending tasks
                 loop = asyncio.get_event_loop()
                 if not loop.is_closed():
@@ -642,12 +763,11 @@ def main():
                     loop.run_until_complete(loop.shutdown_asyncgens())
                     loop.close()
 
-                # Clean exit without forcing
-                sys.exit(0)
+                time.sleep(0.5)  # Give a moment for resources to clean up
+                force_quit()
             except Exception as e:
                 debug_logger.error(f"Error during shutdown: {e}")
-                # Force exit if clean shutdown fails
-                os._exit(0)
+                force_quit()
             
         window.events.closed += on_closed
         
@@ -657,7 +777,8 @@ def main():
         
     except Exception as e:
         debug_logger.error(f"Fatal error in main: {str(e)}", exc_info=True)
-        sys.exit(1)
+        cleanup_resources()
+        force_quit()
 
 if __name__ == '__main__':
     main() 

@@ -352,65 +352,65 @@ document.addEventListener('DOMContentLoaded', function() {
     // Event handlers with debouncing and throttling
     const handlers = {
         async handleSearch() {
-            const url = elements.urlInput.value.trim();
-            if (!url) {
-                ui.addMessage('Please enter a URL', true);
-                return;
-            }
-
-            if (!this.isValidUrl(url)) {
-                ui.addMessage('Invalid URL', true);
-                elements.searchButton.textContent = 'Reset';
-                elements.searchButton.classList.add('reset');
-                elements.searchButton.onclick = this.resetSearch;
-                return;
-            }
-
-            state.setUrl(url);
-            ui.resetUI();
-            ui.toggleProgress(true);
-            ui.updateProgress(10, 'Starting search...');
-
-            const searchMethod = document.querySelector('input[name="searchMethod"]:checked').value;
-            const endpoint = searchMethod === 'gpt' ? CONFIG.ENDPOINTS.SCAN_GPT : CONFIG.ENDPOINTS.SCAN_URL;
-
             try {
-                ui.updateProgress(20, 'Sending request...');
+                const url = elements.urlInput.value.trim();
+                if (!this.isValidUrl(url)) {
+                    ui.addMessage('Please enter a valid URL', true);
+                    return;
+                }
+
+                state.setUrl(url);
+                ui.resetUI();
+                ui.toggleProgress(true);
+                
+                const searchMethod = Array.from(elements.searchMethodRadios).find(radio => radio.checked)?.value;
+                const endpoint = searchMethod === 'gpt' ? CONFIG.ENDPOINTS.SCAN_GPT : CONFIG.ENDPOINTS.SCAN_URL;
+                
+                debugLogger.log(`Starting ${searchMethod} search for URL: ${url}`, 'INFO');
+                
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url })
                 });
 
-                if (!response.ok) throw new Error('Search failed');
-
-                ui.updateProgress(30, 'Processing response...');
-                const data = await response.json();
-                if (data.error) throw new Error(data.error);
-
-                if (searchMethod === 'gpt') {
-                    if (data.status === 'processing') {
-                        ui.updateProgress(40, 'GPT processing started...');
-                        this.pollForResults();
-                    }
-                } else {
-                    if (data.albums) {
-                        ui.updateProgress(90, 'Finalizing results...');
-                        ui.updateAlbumsList(data.albums);
-                        ui.updateProgress(100, 'Search completed successfully');
-                        ui.addMessage('Search completed successfully');
-                    } else {
-                        throw new Error('No albums found');
-                    }
+                debugLogger.log(`Got response with status: ${response.status}`, 'INFO');
+                
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to process URL');
                 }
-            } catch (error) {
-                console.error('Search error:', error);
-                ui.addMessage('Error during search: ' + error.message, true);
-                ui.updateAlbumsList([]);
-            } finally {
-                if (searchMethod !== 'gpt') {
+
+                const data = await response.json();
+                debugLogger.log(`Received response data: ${JSON.stringify(data)}`, 'INFO');
+                
+                if (searchMethod === 'gpt') {
+                    // For GPT method, start polling for results
+                    this.pollForResults();
+                } else {
+                    // For URL method, handle results immediately
+                    debugLogger.log(`Processing URL scan results. Status: ${data.status}`, 'INFO');
+                    
+                    if (data.status === 'complete' && data.albums) {
+                        debugLogger.log(`Found ${data.albums.length} albums`, 'INFO');
+                        ui.updateAlbumsList(data.albums);
+                        if (data.message) {
+                            ui.addMessage(data.message);
+                        }
+                        ui.addMessage(`Found ${data.albums.length} albums`);
+                    } else if (data.status === 'error') {
+                        debugLogger.log(`Error in response: ${data.error}`, 'ERROR');
+                        throw new Error(data.error || 'Failed to process URL');
+                    } else {
+                        debugLogger.log('No albums found in content', 'INFO');
+                        ui.addMessage('No albums found in the content');
+                    }
                     ui.toggleProgress(false);
                 }
+            } catch (error) {
+                debugLogger.log(`Error in handleSearch: ${error.message}`, 'ERROR');
+                ui.addMessage(error.message, true);
+                ui.toggleProgress(false);
             }
         },
 
@@ -552,19 +552,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Event delegation for better performance
     function initializeEventListeners() {
-        elements.searchButton.addEventListener('click', handlers.handleSearch.bind(handlers));
+        elements.searchButton.addEventListener('click', () => handlers.handleSearch());
         elements.urlInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handlers.handleSearch.bind(handlers)();
+            if (e.key === 'Enter') handlers.handleSearch();
         });
         elements.allTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
         elements.popularTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
-        elements.createPlaylistButton.addEventListener('click', handlers.handleCreatePlaylist.bind(handlers));
+        elements.createPlaylistButton.addEventListener('click', () => handlers.handleCreatePlaylist());
 
         // Register cleanups
         registerCleanup(window, () => {
-        if (state.pollMessageTimeout) {
-            clearTimeout(state.pollMessageTimeout);
-        }
+            if (state.pollMessageTimeout) {
+                clearTimeout(state.pollMessageTimeout);
+            }
             if (debugLogger.timeout) {
                 clearTimeout(debugLogger.timeout);
                 debugLogger.flush();

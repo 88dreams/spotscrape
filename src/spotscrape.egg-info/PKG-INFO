@@ -20,10 +20,16 @@ Requires-Dist: beautifulsoup4>=4.12.3
 Requires-Dist: requests>=2.32.3
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: tqdm>=4.67.1
+Requires-Dist: tzdata>=2024.2
+Requires-Dist: email-validator>=2.1.0
+Requires-Dist: pillow>=10.2.0
+Requires-Dist: psutil>=5.9.8
 Provides-Extra: dev
 Requires-Dist: build; extra == "dev"
 Requires-Dist: twine; extra == "dev"
 Requires-Dist: pytest; extra == "dev"
+Provides-Extra: unix
+Requires-Dist: uvloop>=0.19.0; extra == "unix"
 
 # SpotScrape
 

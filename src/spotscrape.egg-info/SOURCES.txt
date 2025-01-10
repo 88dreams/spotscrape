@@ -14,7 +14,11 @@ frontend/static/js/app.js
 frontend/templates/index.html
 src/spotscrape/__init__.py
 src/spotscrape/app.py
+src/spotscrape/content_processor.py
 src/spotscrape/core.py
+src/spotscrape/spotify_manager.py
+src/spotscrape/utils.py
+src/spotscrape/web_extractor.py
 src/spotscrape.egg-info/PKG-INFO
 src/spotscrape.egg-info/SOURCES.txt
 src/spotscrape.egg-info/dependency_links.txt
@@ -25,6 +29,7 @@ src/spotscrape/frontend/static/css/styles.css
 src/spotscrape/frontend/static/css/tailwind.min.css
 src/spotscrape/frontend/static/js/app.js
 src/spotscrape/frontend/templates/index.html
+tests/test_core.py
 web/.cache
 web/SpotScrape_data/musicdata_url_20250103_175836.json
 web/SpotScrape_data/musicdata_url_20250103_180052.json

@@ -9,6 +9,9 @@ import asyncio
 from typing import List, Dict, Optional, Any, Callable
 
 class SpotifySearchManager:
+    _spotify_instance = None
+    _spotify_lock = asyncio.Lock()
+
     def __init__(self):
         self._progress_callback = None
         self.logger = logging.getLogger('spot-debug')
@@ -16,19 +19,75 @@ class SpotifySearchManager:
     def set_progress_callback(self, callback: Callable[[int, str], None]) -> None:
         self._progress_callback = callback
     
+    async def get_spotify(self):
+        """Get or create Spotify client instance."""
+        async with self._spotify_lock:
+            if not self._spotify_instance:
+                self.logger.info("Initializing Spotify client")
+                self._spotify_instance = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                    scope="playlist-modify-public playlist-modify-private"
+                ))
+            return self._spotify_instance
+    
     async def scan_spotify_links(self, content: str) -> List[str]:
         """Extract Spotify album IDs from content."""
-        album_pattern = r'https://open\.spotify\.com/album/([a-zA-Z0-9]+)'
-        album_ids = list(set(re.findall(album_pattern, content)))
-        return album_ids
+        if not content:
+            self.logger.warning("Empty content provided for scanning")
+            return []
+
+        # Clean the content first
+        content = content.replace('\\/', '/').replace('&amp;', '&')
+        
+        # Comprehensive set of patterns to match various Spotify album URL formats
+        patterns = [
+            # Standard web URLs
+            r'(?:https?://)?(?:www\.)?(?:open|play)\.spotify\.com/album/([a-zA-Z0-9]{22})(?:\?.*)?',
+            # Spotify URIs
+            r'spotify:album:([a-zA-Z0-9]{22})',
+            # Basic URLs
+            r'spotify\.com/album/([a-zA-Z0-9]{22})',
+            # Relative URLs
+            r'/album/([a-zA-Z0-9]{22})',
+            # Embedded player URLs
+            r'embed/album/([a-zA-Z0-9]{22})',
+            # API URLs
+            r'api\.spotify\.com/v1/albums/([a-zA-Z0-9]{22})'
+        ]
+        
+        album_ids = set()
+        for pattern in patterns:
+            try:
+                matches = re.finditer(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    album_id = match.group(1)
+                    if album_id and len(album_id) == 22:  # Validate ID length
+                        album_ids.add(album_id)
+                        self.logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
+            except Exception as e:
+                self.logger.error(f"Error matching pattern '{pattern}': {e}")
+                continue
+        
+        # Log results
+        if album_ids:
+            self.logger.info(f"Found {len(album_ids)} unique album IDs: {', '.join(album_ids)}")
+        else:
+            self.logger.info("No album IDs found in content")
+            # Log a sample of the content for debugging
+            content_sample = content[:500] + '...' if len(content) > 500 else content
+            self.logger.debug(f"Content sample: {content_sample}")
+            
+        return list(album_ids)
     
     async def get_album_info(self, album_id: str) -> Optional[Dict[str, Any]]:
         """Get album information from Spotify API."""
         try:
-            sp = spotipy.Spotify(auth_manager=SpotifyOAuth())
-            return sp.album(album_id)
+            sp = await self.get_spotify()
+            album_info = sp.album(album_id)
+            if album_info:
+                self.logger.info(f"Successfully retrieved info for album: {album_info.get('name', 'Unknown')}")
+            return album_info
         except Exception as e:
-            self.logger.error(f"Error getting album info: {e}")
+            self.logger.error(f"Error getting album info for ID {album_id}: {e}")
             return None
 
 class PlaylistManager:
