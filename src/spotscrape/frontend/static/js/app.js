@@ -585,6 +585,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 const url = elements.urlInput.value.trim();
                 if (!this.isValidUrl(url)) {
                     ui.addMessage('Please enter a valid URL', true);
+                    elements.searchButton.textContent = 'Clear';
+                    elements.searchButton.onclick = () => {
+                        elements.urlInput.value = '';
+                        elements.searchButton.textContent = 'Search';
+                        elements.searchButton.onclick = handlers.handleSearch.bind(handlers);
+                    };
                     return;
                 }
 
