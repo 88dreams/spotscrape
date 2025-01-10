@@ -180,18 +180,18 @@ document.addEventListener('DOMContentLoaded', function() {
             template.innerHTML = `
         <div class="album-card">
             <div class="album-card-inner">
-                <input type="checkbox" class="album-checkbox" checked>
-                        <img class="album-thumbnail" loading="lazy">
+                <input type="checkbox" class="album-checkbox" aria-label="Select album">
+                <img class="album-thumbnail" src="" alt="" loading="lazy">
                 <div class="album-info">
                     <div class="tooltip-container">
-                        <div class="album-artist font-semibold text-truncate"></div>
+                        <div class="album-title text-truncate"></div>
                         <span class="tooltip-text"></span>
                     </div>
                     <div class="tooltip-container">
-                        <div class="album-title text-gray-600 text-truncate"></div>
+                        <div class="album-artist text-truncate"></div>
                         <span class="tooltip-text"></span>
                     </div>
-                    <div class="text-sm text-gray-500 text-truncate"></div>
+                    <div class="album-popularity text-sm"></div>
                 </div>
             </div>
         </div>
@@ -255,51 +255,81 @@ document.addEventListener('DOMContentLoaded', function() {
 
         updateAlbumsList(albums) {
             if (!albums?.length) {
-                elements.albumsList.innerHTML = '';
-                state.clearSelectedAlbums();
-            return;
-        }
+                const albumsList = document.getElementById('albumsList');
+                if (albumsList) {
+                    albumsList.innerHTML = '';
+                }
+                return;
+            }
 
-        const fragment = document.createDocumentFragment();
-        
-        albums.forEach(album => {
-                const card = templates.albumCard.content.cloneNode(true);
-                const cardElement = card.firstElementChild;
-                const img = cardElement.querySelector('img');
-                const artistDiv = cardElement.querySelector('.album-artist');
-                const artistTooltip = cardElement.querySelector('.album-artist + .tooltip-text');
-                const titleDiv = cardElement.querySelector('.album-title');
-                const titleTooltip = cardElement.querySelector('.album-title + .tooltip-text');
-                const popularityDiv = cardElement.querySelector('.text-sm');
-                const checkbox = cardElement.querySelector('input[type="checkbox"]');
+            const albumsList = document.getElementById('albumsList');
+            if (!albumsList) {
+                console.error('Albums list container not found');
+                return;
+            }
 
-                img.src = album.images?.[0]?.url || 'https://placehold.co/64x64?text=Album';
-            img.alt = album.name;
-            artistDiv.textContent = album.artist;
-            artistTooltip.textContent = album.artist;
-            titleDiv.textContent = album.name;
-            titleTooltip.textContent = album.name;
-            popularityDiv.textContent = `Popularity: ${album.popularity}`;
+            const fragment = document.createDocumentFragment();
+            albumsList.innerHTML = '';
 
-            checkbox.addEventListener('change', () => {
-                if (checkbox.checked) {
-                    state.addSelectedAlbum(album.id);
-                        cardElement.classList.add('selected');
-                } else {
-                    state.removeSelectedAlbum(album.id);
-                        cardElement.classList.remove('selected');
+            albums.forEach(album => {
+                try {
+                    const card = templates.albumCard.content.cloneNode(true);
+                    const cardElement = card.firstElementChild;
+                    
+                    // Query all required elements
+                    const elements = {
+                        img: cardElement.querySelector('.album-thumbnail'),
+                        artistDiv: cardElement.querySelector('.album-artist'),
+                        artistTooltip: cardElement.querySelector('.album-artist + .tooltip-text'),
+                        titleDiv: cardElement.querySelector('.album-title'),
+                        titleTooltip: cardElement.querySelector('.album-title + .tooltip-text'),
+                        popularityDiv: cardElement.querySelector('.album-popularity.text-sm'),
+                        checkbox: cardElement.querySelector('.album-checkbox')
+                    };
+
+                    // Verify all elements exist
+                    Object.entries(elements).forEach(([name, element]) => {
+                        if (!element) {
+                            throw new Error(`Required element '${name}' not found in album card template`);
+                        }
+                    });
+
+                    // Set image with fallback
+                    elements.img.src = album.images?.[0]?.url || 'https://placehold.co/80x80?text=Album';
+                    elements.img.alt = `${album.name} album cover`;
+
+                    // Set text content
+                    elements.artistDiv.textContent = album.artist;
+                    elements.artistTooltip.textContent = album.artist;
+                    elements.titleDiv.textContent = album.name;
+                    elements.titleTooltip.textContent = album.name;
+                    
+                    // Format popularity with emoji indicator
+                    const popularityScore = album.popularity || 0;
+                    const popularityEmoji = popularityScore >= 75 ? '🔥' : 
+                                          popularityScore >= 50 ? '⭐' : 
+                                          popularityScore >= 25 ? '👍' : '🎵';
+                    elements.popularityDiv.textContent = `${popularityEmoji} Popularity: ${popularityScore}`;
+
+                    // Handle selection
+                    elements.checkbox.addEventListener('change', () => {
+                        if (elements.checkbox.checked) {
+                            state.addSelectedAlbum(album.id);
+                            cardElement.classList.add('selected');
+                        } else {
+                            state.removeSelectedAlbum(album.id);
+                            cardElement.classList.remove('selected');
+                        }
+                    });
+
+                    fragment.appendChild(card);
+                } catch (error) {
+                    console.error('Error creating album card:', error);
+                    this.addMessage(`Error creating album card for "${album.name}": ${error.message}`, true);
                 }
             });
 
-            state.addSelectedAlbum(album.id);
-                cardElement.classList.add('selected');
-            fragment.appendChild(card);
-        });
-
-            requestAnimationFrame(() => {
-                elements.albumsList.innerHTML = '';
-                elements.albumsList.appendChild(fragment);
-            });
+            albumsList.appendChild(fragment);
         },
 
         startMessagePolling() {

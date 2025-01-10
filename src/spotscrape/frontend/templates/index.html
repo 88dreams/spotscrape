@@ -147,6 +147,31 @@
         </section>
     </main>
 
+    <!-- Templates -->
+    <template id="message">
+        <div class="message"></div>
+    </template>
+
+    <template id="albumCard">
+        <div class="album-card">
+            <div class="album-card-inner">
+                <input type="checkbox" class="album-checkbox" aria-label="Select album">
+                <img class="album-thumbnail" src="" alt="" loading="lazy">
+                <div class="album-info">
+                    <div class="tooltip-container">
+                        <div class="album-title text-truncate"></div>
+                        <span class="tooltip-text"></span>
+                    </div>
+                    <div class="tooltip-container">
+                        <div class="album-artist text-truncate"></div>
+                        <span class="tooltip-text"></span>
+                    </div>
+                    <div class="album-popularity text-sm"></div>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <script src="/static/js/app.js" defer></script>
 </body>
 </html> 
