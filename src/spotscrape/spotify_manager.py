@@ -14,7 +14,14 @@ class SpotifySearchManager:
 
     def __init__(self):
         self._progress_callback = None
+        # Configure logger
         self.logger = logging.getLogger('spot-debug')
+        self.logger.propagate = False
+        # Disable spotipy logging
+        spotipy_logger = logging.getLogger('spotipy')
+        spotipy_logger.setLevel(logging.ERROR)
+        spotipy_logger.propagate = False
+        spotipy_logger.disabled = True
     
     def set_progress_callback(self, callback: Callable[[int, str], None]) -> None:
         self._progress_callback = callback

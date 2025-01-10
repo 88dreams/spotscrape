@@ -29,6 +29,7 @@ import time
 def setup_debug_logging():
     debug_logger = logging.getLogger('spot-debug')
     debug_logger.setLevel(logging.DEBUG)
+    debug_logger.propagate = False  # Prevent propagation to root logger
     
     # Get the executable's directory or current directory
     if getattr(sys, 'frozen', False):
@@ -46,24 +47,43 @@ def setup_debug_logging():
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(logging.DEBUG)
     
-    # Also add console handler for immediate feedback
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
-    
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
     )
     file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    
+    # Remove any existing handlers
+    for handler in debug_logger.handlers[:]:
+        debug_logger.removeHandler(handler)
     
     debug_logger.addHandler(file_handler)
-    debug_logger.addHandler(console_handler)
-    
     debug_logger.info(f"Log file created at: {log_path}")
     return debug_logger
 
 # Initialize debug logger
 debug_logger = setup_debug_logging()
+
+# Completely disable all Flask and Werkzeug logging
+logging.getLogger('werkzeug').disabled = True
+cli = sys.modules['flask.cli']
+cli.show_server_banner = lambda *x: None
+
+# Create the Flask app with logging disabled
+app = Flask(__name__)
+app.logger.disabled = True
+app.config['PROPAGATE_EXCEPTIONS'] = False
+
+# Disable all loggers
+for logger_name in logging.root.manager.loggerDict:
+    logging.getLogger(logger_name).disabled = True
+    logging.getLogger(logger_name).propagate = False
+
+# Re-enable only our debug logger
+debug_logger.disabled = False
+
+# Configure root logger to prevent console output
+logging.getLogger().setLevel(logging.ERROR)
+logging.getLogger().handlers = []
 
 # Initialize Flask
 if getattr(sys, 'frozen', False):
@@ -129,8 +149,15 @@ progress_queue = Queue()
 
 # Modify the user_message function to send to GUI
 def gui_message(msg: str, log_only: bool = False):
+    """Send message to GUI and log it.
+    
+    Args:
+        msg (str): The message to send
+        log_only (bool): If True, only log the message without sending to GUI
+    """
     debug_logger.info(f"GUI Message: {msg}")
-    message_queue.put(msg)
+    if not log_only:
+        message_queue.put(msg)
 
 # Override the user_message in spotscrape
 spotscrape.user_message = gui_message
@@ -646,7 +673,8 @@ def force_quit():
         
         # Force kill the process
         if sys.platform == 'win32':
-            os.system(f'taskkill /F /PID {pid} /T')
+            # Redirect output to null to suppress taskkill messages
+            os.system(f'taskkill /F /PID {pid} /T >nul 2>&1')
         else:
             os.kill(pid, signal.SIGKILL)
     except Exception as e:
@@ -705,16 +733,35 @@ def shutdown_server():
 def start_server():
     """Start the Flask server"""
     debug_logger.debug("Starting Flask server")
-    app.run(port=5000, threaded=True)
+    # Disable Flask development server output
+    import click
+    click.echo = lambda *args, **kwargs: None
+    # Run Flask with minimal output
+    app.run(port=5000, threaded=True, debug=False, use_reloader=False)
 
 def main():
     """Entry point for the application"""
     try:
+        # Suppress all console output
+        class NullIO:
+            def write(self, *args, **kwargs):
+                pass
+            def flush(self, *args, **kwargs):
+                pass
+        
+        sys.stdout = NullIO()
+        sys.stderr = NullIO()
+        
+        # Disable all warnings
+        import warnings
+        warnings.filterwarnings('ignore')
+        
         # Register cleanup function
         atexit.register(cleanup_resources)
         
         # Disable debug mode for webview
         webview.WEBVIEW_DEBUG = False
+        os.environ['WEBVIEW_LOGS'] = '0'  # Disable webview logging
         
         # Handle Ctrl+C gracefully
         def signal_handler(signum, frame):

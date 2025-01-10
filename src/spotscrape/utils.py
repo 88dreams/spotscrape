@@ -25,10 +25,12 @@ def setup_logging() -> Tuple[logging.Logger, logging.Logger]:
     # Set up main logger
     logger = logging.getLogger('spot-main')
     logger.setLevel(logging.INFO)
+    logger.propagate = False  # Prevent propagation to root logger
     
     # Set up Spotify logger
     spotify_logger = logging.getLogger('spot-spotify')
     spotify_logger.setLevel(logging.INFO)
+    spotify_logger.propagate = False  # Prevent propagation to root logger
     
     # Create handlers with date in filename
     main_handler = logging.FileHandler(
@@ -40,10 +42,6 @@ def setup_logging() -> Tuple[logging.Logger, logging.Logger]:
         encoding='utf-8'
     )
     
-    # Create console handler for immediate feedback
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    
     # Create formatters
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
@@ -52,15 +50,18 @@ def setup_logging() -> Tuple[logging.Logger, logging.Logger]:
     # Set formatters
     main_handler.setFormatter(formatter)
     spotify_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
+    
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    for handler in spotify_logger.handlers[:]:
+        spotify_logger.removeHandler(handler)
     
     # Add handlers
     logger.addHandler(main_handler)
-    logger.addHandler(console_handler)
     spotify_logger.addHandler(spotify_handler)
-    spotify_logger.addHandler(console_handler)
     
-    # Log startup message
+    # Log initialization silently (only to file)
     logger.info(f"Logging initialized. Log directory: {log_dir}")
     spotify_logger.info(f"Spotify logging initialized. Log directory: {log_dir}")
     
