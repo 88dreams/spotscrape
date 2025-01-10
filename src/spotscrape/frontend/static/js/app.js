@@ -103,7 +103,8 @@ document.addEventListener('DOMContentLoaded', function() {
         progressBar: document.getElementById('progressBar'),
         progressText: document.getElementById('progressText'),
         progressPercent: document.getElementById('progressPercent'),
-        searchMethodRadios: document.querySelectorAll('input[name="searchMethod"]')
+        searchMethodRadios: document.querySelectorAll('input[name="searchMethod"]'),
+        toggleSelectAll: document.getElementById('toggleSelectAll')
     };
 
     // Validate critical elements
@@ -212,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // UI updates with requestAnimationFrame
     const ui = {
         resetUI() {
-        state.clearSelectedAlbums();
+            state.clearSelectedAlbums();
             this.updateAlbumsList([]);
             elements.playlistName.value = '';
             elements.playlistDescription.value = '';
@@ -220,38 +221,41 @@ document.addEventListener('DOMContentLoaded', function() {
             elements.createPlaylistButton.disabled = false;
             elements.createPlaylistButton.textContent = 'GO';
             elements.messagesDiv.innerHTML = '';
+            this.updateSelectAllButton(true);
         },
 
-        toggleProgress(show) {
-            elements.progressContainer.classList.toggle('hidden', !show);
-            if (show) {
-                this.startMessagePolling();
+        updateSelectAllButton(allSelected = false) {
+            if (!elements.toggleSelectAll) return;
+            
+            const button = elements.toggleSelectAll;
+            const textSpan = button.querySelector('.select-all-text');
+            
+            if (allSelected) {
+                button.classList.remove('none-selected');
+                textSpan.textContent = 'Deselect All';
             } else {
-                this.stopMessagePolling();
+                button.classList.add('none-selected');
+                textSpan.textContent = 'Select All';
             }
         },
 
-        updateProgress(percent, message) {
-            requestAnimationFrame(() => {
-                elements.progressBar.style.width = `${percent}%`;
-                elements.progressText.textContent = message;
-                elements.progressPercent.textContent = `${Math.round(percent)}%`;
-            });
-        },
-
-        addMessage(message, isError = false) {
-            requestAnimationFrame(() => {
-                const messageElement = templates.message.content.cloneNode(true).firstElementChild;
-                messageElement.textContent = message;
-                messageElement.classList.add(isError ? 'error' : 'success');
+        toggleAllAlbums(select = true) {
+            const checkboxes = elements.albumsList.querySelectorAll('.album-checkbox');
+            checkboxes.forEach(checkbox => {
+                const cardElement = checkbox.closest('.album-card');
+                const albumId = cardElement.dataset.albumId;
                 
-                elements.messagesDiv.appendChild(messageElement);
-                elements.messagesDiv.scrollTop = elements.messagesDiv.scrollHeight;
-
-                while (elements.messagesDiv.children.length > CONFIG.MESSAGES.MAX_COUNT) {
-                    elements.messagesDiv.removeChild(elements.messagesDiv.firstChild);
+                checkbox.checked = select;
+                if (select) {
+                    state.addSelectedAlbum(albumId);
+                    cardElement.classList.add('selected');
+                } else {
+                    state.removeSelectedAlbum(albumId);
+                    cardElement.classList.remove('selected');
                 }
             });
+            
+            this.updateSelectAllButton(select);
         },
 
         updateAlbumsList(albums) {
@@ -276,6 +280,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 try {
                     const card = templates.albumCard.content.cloneNode(true);
                     const cardElement = card.firstElementChild;
+                    cardElement.dataset.albumId = album.id;
                     
                     // Query all required elements
                     const elements = {
@@ -313,6 +318,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                           popularityScore >= 25 ? '👍' : '🎵';
                     elements.popularityDiv.textContent = `${popularityEmoji} Popularity: ${popularityScore}`;
 
+                    // Set default checked state
+                    elements.checkbox.checked = true;
+                    cardElement.classList.add('selected');
+                    state.addSelectedAlbum(album.id);
+
                     // Handle selection
                     elements.checkbox.addEventListener('change', () => {
                         if (elements.checkbox.checked) {
@@ -322,11 +332,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             state.removeSelectedAlbum(album.id);
                             cardElement.classList.remove('selected');
                         }
+                        // Update select all button state
+                        const allChecked = !elements.albumsList.querySelector('.album-checkbox:not(:checked)');
+                        this.updateSelectAllButton(allChecked);
                     });
 
                     // Handle Spotify play button click
                     const handleSpotifyPlay = (e) => {
-                        e.stopPropagation(); // Prevent checkbox interaction
+                        e.stopPropagation();
                         if (album.spotify_url) {
                             window.open(album.spotify_url, '_blank');
                         } else {
@@ -338,7 +351,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     // Make the entire card clickable for Spotify
                     cardElement.addEventListener('click', (e) => {
-                        // Don't trigger if clicking checkbox or if target is the checkbox label
                         if (e.target !== elements.checkbox && !e.target.closest('label')) {
                             handleSpotifyPlay(e);
                         }
@@ -352,6 +364,39 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             albumsList.appendChild(fragment);
+            this.updateSelectAllButton(true);
+        },
+
+        toggleProgress(show) {
+            elements.progressContainer.classList.toggle('hidden', !show);
+            if (show) {
+                this.startMessagePolling();
+            } else {
+                this.stopMessagePolling();
+            }
+        },
+
+        updateProgress(percent, message) {
+            requestAnimationFrame(() => {
+                elements.progressBar.style.width = `${percent}%`;
+                elements.progressText.textContent = message;
+                elements.progressPercent.textContent = `${Math.round(percent)}%`;
+            });
+        },
+
+        addMessage(message, isError = false) {
+            requestAnimationFrame(() => {
+                const messageElement = templates.message.content.cloneNode(true).firstElementChild;
+                messageElement.textContent = message;
+                messageElement.classList.add(isError ? 'error' : 'success');
+                
+                elements.messagesDiv.appendChild(messageElement);
+                elements.messagesDiv.scrollTop = elements.messagesDiv.scrollHeight;
+
+                while (elements.messagesDiv.children.length > CONFIG.MESSAGES.MAX_COUNT) {
+                    elements.messagesDiv.removeChild(elements.messagesDiv.firstChild);
+                }
+            });
         },
 
         startMessagePolling() {
@@ -386,18 +431,26 @@ document.addEventListener('DOMContentLoaded', function() {
         },
 
         async pollForResults() {
+            let progressValue = 40;
             let delay = CONFIG.POLLING.MIN_DELAY;
             let pollTimeout;
 
             const poll = async () => {
                 try {
+                    if (progressValue < 90) {
+                        progressValue = Math.min(progressValue + 2, 90);
+                        ui.updateProgress(progressValue, 'Processing content...');
+                    }
+                    
                     const response = await fetch(CONFIG.ENDPOINTS.GPT_RESULTS);
                     const data = await response.json();
                     
                     if (data.status === 'complete') {
                         if (data.albums) {
-                            this.updateAlbumsList(data.albums);
-                            this.toggleProgress(false);
+                            ui.updateProgress(100, 'Search completed successfully');
+                            ui.updateAlbumsList(data.albums);
+                            ui.addMessage('Search completed successfully');
+                            ui.toggleProgress(false);
                         } else {
                             throw new Error('No albums found');
                         }
@@ -411,9 +464,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                 } catch (error) {
                     console.error('Polling error:', error);
-                    this.addMessage('Error during search: ' + error.message, true);
-                    this.updateAlbumsList([]);
-                    this.toggleProgress(false);
+                    ui.addMessage('Error during search: ' + error.message, true);
+                    ui.updateAlbumsList([]);
+                    ui.toggleProgress(false);
                 }
             };
 
@@ -424,12 +477,12 @@ document.addEventListener('DOMContentLoaded', function() {
         async handleCreatePlaylist() {
             if (state.playlistCreationInProgress) return;
 
-        if (state.getSelectedAlbumsCount() === 0) {
+            if (state.getSelectedAlbumsCount() === 0) {
                 ui.addMessage('Please select at least one album', true);
-            return;
-        }
+                return;
+            }
 
-        state.setPlaylistCreationStatus(true);
+            state.setPlaylistCreationStatus(true);
             elements.createPlaylistButton.disabled = true;
             elements.createPlaylistButton.textContent = 'Creating...';
             ui.toggleProgress(true);
@@ -437,20 +490,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
             try {
                 const response = await fetch(CONFIG.ENDPOINTS.CREATE_PLAYLIST, {
-                method: 'POST',
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    albums: state.getSelectedAlbumsArray(),
+                    body: JSON.stringify({
+                        albums: state.getSelectedAlbumsArray(),
                         playlistName: elements.playlistName.value || this.getDefaultPlaylistName(),
                         playlistDescription: elements.playlistDescription.value,
                         includeAllTracks: elements.allTracksSwitch.checked,
                         includePopularTracks: elements.popularTracksSwitch.checked
-                })
-            });
+                    })
+                });
 
                 if (!response.ok) throw new Error('Failed to create playlist');
 
-            const data = await response.json();
+                const data = await response.json();
                 if (data.error) throw new Error(data.error);
 
                 this.showCompletionPopup('Playlist created successfully!');
@@ -458,13 +511,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 elements.createPlaylistButton.disabled = false;
                 elements.createPlaylistButton.textContent = 'GO';
 
-        } catch (error) {
-            console.error('Playlist creation error:', error);
+            } catch (error) {
+                console.error('Playlist creation error:', error);
                 ui.addMessage('Error creating playlist: ' + error.message, true);
                 elements.createPlaylistButton.disabled = false;
                 elements.createPlaylistButton.textContent = 'GO';
-        } finally {
-            state.setPlaylistCreationStatus(false);
+            } finally {
+                state.setPlaylistCreationStatus(false);
                 ui.toggleProgress(false);
             }
         },
@@ -473,9 +526,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const isAllTracks = event.target === elements.allTracksSwitch;
             const otherSwitch = isAllTracks ? elements.popularTracksSwitch : elements.allTracksSwitch;
         
-        if (event.target.checked) {
-            otherSwitch.checked = false;
-        }
+            if (event.target.checked) {
+                otherSwitch.checked = false;
+            }
         },
 
         resetSearch() {
@@ -496,15 +549,15 @@ document.addEventListener('DOMContentLoaded', function() {
         },
 
         getDefaultPlaylistName() {
-        let domain = 'unknown-domain';
-        try {
-            if (state.currentUrl) {
-                const url = new URL(state.currentUrl);
-                domain = url.hostname.replace('www.', '');
+            let domain = 'unknown-domain';
+            try {
+                if (state.currentUrl) {
+                    const url = new URL(state.currentUrl);
+                    domain = url.hostname.replace('www.', '');
+                }
+            } catch (error) {
+                console.error('Invalid URL:', state.currentUrl);
             }
-        } catch (error) {
-            console.error('Invalid URL:', state.currentUrl);
-        }
             return `${domain} - ${new Date().toLocaleString()}`;
         },
 
@@ -602,7 +655,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else {
                             throw new Error('No albums found');
                         }
-            return;
+                        return;
                     } else if (data.status === 'error') {
                         throw new Error(data.error || 'Search failed');
                     }
@@ -625,12 +678,12 @@ document.addEventListener('DOMContentLoaded', function() {
         async handleCreatePlaylist() {
             if (state.playlistCreationInProgress) return;
 
-        if (state.getSelectedAlbumsCount() === 0) {
+            if (state.getSelectedAlbumsCount() === 0) {
                 ui.addMessage('Please select at least one album', true);
-            return;
-        }
+                return;
+            }
 
-        state.setPlaylistCreationStatus(true);
+            state.setPlaylistCreationStatus(true);
             elements.createPlaylistButton.disabled = true;
             elements.createPlaylistButton.textContent = 'Creating...';
             ui.toggleProgress(true);
@@ -638,20 +691,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
             try {
                 const response = await fetch(CONFIG.ENDPOINTS.CREATE_PLAYLIST, {
-                method: 'POST',
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    albums: state.getSelectedAlbumsArray(),
+                    body: JSON.stringify({
+                        albums: state.getSelectedAlbumsArray(),
                         playlistName: elements.playlistName.value || this.getDefaultPlaylistName(),
                         playlistDescription: elements.playlistDescription.value,
                         includeAllTracks: elements.allTracksSwitch.checked,
                         includePopularTracks: elements.popularTracksSwitch.checked
-                })
-            });
+                    })
+                });
 
                 if (!response.ok) throw new Error('Failed to create playlist');
 
-            const data = await response.json();
+                const data = await response.json();
                 if (data.error) throw new Error(data.error);
 
                 this.showCompletionPopup('Playlist created successfully!');
@@ -659,13 +712,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 elements.createPlaylistButton.disabled = false;
                 elements.createPlaylistButton.textContent = 'GO';
 
-        } catch (error) {
-            console.error('Playlist creation error:', error);
+            } catch (error) {
+                console.error('Playlist creation error:', error);
                 ui.addMessage('Error creating playlist: ' + error.message, true);
                 elements.createPlaylistButton.disabled = false;
                 elements.createPlaylistButton.textContent = 'GO';
-        } finally {
-            state.setPlaylistCreationStatus(false);
+            } finally {
+                state.setPlaylistCreationStatus(false);
                 ui.toggleProgress(false);
             }
         },
@@ -674,9 +727,9 @@ document.addEventListener('DOMContentLoaded', function() {
             const isAllTracks = event.target === elements.allTracksSwitch;
             const otherSwitch = isAllTracks ? elements.popularTracksSwitch : elements.allTracksSwitch;
         
-        if (event.target.checked) {
-            otherSwitch.checked = false;
-        }
+            if (event.target.checked) {
+                otherSwitch.checked = false;
+            }
         },
 
         resetSearch() {
@@ -697,15 +750,15 @@ document.addEventListener('DOMContentLoaded', function() {
         },
 
         getDefaultPlaylistName() {
-        let domain = 'unknown-domain';
-        try {
-            if (state.currentUrl) {
-                const url = new URL(state.currentUrl);
-                domain = url.hostname.replace('www.', '');
+            let domain = 'unknown-domain';
+            try {
+                if (state.currentUrl) {
+                    const url = new URL(state.currentUrl);
+                    domain = url.hostname.replace('www.', '');
+                }
+            } catch (error) {
+                console.error('Invalid URL:', state.currentUrl);
             }
-        } catch (error) {
-            console.error('Invalid URL:', state.currentUrl);
-        }
             return `${domain} - ${new Date().toLocaleString()}`;
         },
 
@@ -716,13 +769,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Event delegation for better performance
     function initializeEventListeners() {
-        elements.searchButton.addEventListener('click', () => handlers.handleSearch());
+        elements.searchButton.addEventListener('click', () => handlers.handleSearch.bind(handlers)());
         elements.urlInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handlers.handleSearch();
+            if (e.key === 'Enter') handlers.handleSearch.bind(handlers)();
         });
         elements.allTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
         elements.popularTracksSwitch.addEventListener('change', handlers.handleTrackTypeChange);
-        elements.createPlaylistButton.addEventListener('click', () => handlers.handleCreatePlaylist());
+        elements.createPlaylistButton.addEventListener('click', () => handlers.handleCreatePlaylist.bind(handlers)());
+
+        // Add select all toggle handler
+        if (elements.toggleSelectAll) {
+            elements.toggleSelectAll.addEventListener('click', () => {
+                const isSelectingAll = elements.toggleSelectAll.querySelector('.select-all-text').textContent === 'Select All';
+                ui.toggleAllAlbums(isSelectingAll);
+            });
+        }
 
         // Register cleanups
         registerCleanup(window, () => {

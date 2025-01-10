@@ -572,4 +572,46 @@ input:checked + .toggle-slider:before {
     font-size: 1rem;
     margin-left: 2px;
     line-height: 1;
+}
+
+.select-all-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--color-primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius-full);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+}
+
+.select-all-button:hover {
+    background: var(--color-primary-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(59, 130, 246, 0.25);
+}
+
+.select-all-button:active {
+    transform: translateY(0);
+}
+
+.select-all-button::before {
+    content: '✓';
+    font-size: 1rem;
+    transition: transform var(--transition-fast);
+}
+
+.select-all-button.none-selected::before {
+    transform: scale(0);
+    opacity: 0;
+}
+
+/* Adjust section title margin */
+.section-title.mb-0 {
+    margin-bottom: 0;
 } 

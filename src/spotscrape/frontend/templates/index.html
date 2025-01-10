@@ -75,7 +75,14 @@
 
         <!-- Albums Section -->
         <section class="card" aria-labelledby="albums-section">
-            <h2 id="albums-section" class="section-title">Albums + Artists</h2>
+            <div class="flex justify-between items-center mb-4">
+                <h2 id="albums-section" class="section-title mb-0">Albums + Artists</h2>
+                <button id="toggleSelectAll" 
+                        class="select-all-button"
+                        aria-label="Toggle select all albums">
+                    <span class="select-all-text">Deselect All</span>
+                </button>
+            </div>
             <div id="albumsList" 
                  class="albums-grid"
                  role="grid"
