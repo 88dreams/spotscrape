@@ -24,6 +24,11 @@ wheels/
 .cache
 src/spotscrape/.cache
 
+# Configuration files
+config.json
+*.config.json
+!config.json.example
+
 # Logs
 *.log
 src/spotscrape/logs/
