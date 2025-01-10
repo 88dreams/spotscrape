@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotscrape"
+version = "1.0.0"
+description = "A tool for scraping music information and creating Spotify playlists"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "88dreams"}
+]
+dependencies = [
+    "flask>=2.0.1",
+    "pywebview>=4.0",
+    "flask-cors>=4.0.0",
+    "spotipy>=2.19.0",
+    "openai>=0.27.0",
+    "playwright>=1.20.0",
+    "aiofiles>=24.1.0",
+    "aiohappyeyeballs>=2.4.4",
+    "aiohttp>=3.11.11",
+    "beautifulsoup4>=4.12.3",
+    "requests>=2.32.3",
+    "python-dotenv>=1.0.1",
+    "tqdm>=4.67.1"
+]
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "twine",
+    "pytest"
+]
+
+[project.scripts]
+spotscrape = "spotscrape.app:main"
+spotscrape-gui = "spotscrape.app:main"
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["spotscrape*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+"spotscrape" = [
+    "frontend/static/css/*",
+    "frontend/static/js/*",
+    "frontend/templates/*",
+    "config.json.example",
+    ".env.example"
+] 

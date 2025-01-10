@@ -1,4 +1,4 @@
-﻿flask>=2.0.1
+flask>=2.0.1
 pywebview>=4.0
 flask-cors>=4.0.0
 spotipy>=2.19.0
@@ -11,3 +11,8 @@ beautifulsoup4>=4.12.3
 requests>=2.32.3
 python-dotenv>=1.0.1
 tqdm>=4.67.1
+
+[dev]
+build
+twine
+pytest

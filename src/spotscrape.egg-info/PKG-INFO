@@ -1,3 +1,30 @@
+Metadata-Version: 2.2
+Name: spotscrape
+Version: 1.0.0
+Summary: A tool for scraping music information and creating Spotify playlists
+Author: 88dreams
+License: MIT
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: flask>=2.0.1
+Requires-Dist: pywebview>=4.0
+Requires-Dist: flask-cors>=4.0.0
+Requires-Dist: spotipy>=2.19.0
+Requires-Dist: openai>=0.27.0
+Requires-Dist: playwright>=1.20.0
+Requires-Dist: aiofiles>=24.1.0
+Requires-Dist: aiohappyeyeballs>=2.4.4
+Requires-Dist: aiohttp>=3.11.11
+Requires-Dist: beautifulsoup4>=4.12.3
+Requires-Dist: requests>=2.32.3
+Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: tqdm>=4.67.1
+Provides-Extra: dev
+Requires-Dist: build; extra == "dev"
+Requires-Dist: twine; extra == "dev"
+Requires-Dist: pytest; extra == "dev"
+
 # SpotScrape
 
 A Python tool for scraping music information from web pages and creating Spotify playlists.

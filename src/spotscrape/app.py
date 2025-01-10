@@ -460,9 +460,12 @@ def start_server():
     debug_logger.debug("Starting Flask server")
     app.run(port=5000, threaded=True)
 
-if __name__ == '__main__':
-    debug_logger.debug("Application starting")
+def main():
+    """Entry point for the application"""
     try:
+        # Disable debug mode for webview
+        webview.WEBVIEW_DEBUG = False
+        
         # Handle Ctrl+C gracefully
         def signal_handler(signum, frame):
             debug_logger.info("Received shutdown signal")
@@ -521,5 +524,7 @@ if __name__ == '__main__':
         
     except Exception as e:
         debug_logger.error(f"Fatal error in main: {str(e)}", exc_info=True)
-        sys.exit(1) 
-        sys.exit(1) 
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main() 

@@ -1,3 +1,15 @@
+Metadata-Version: 2.2
+Name: spotscrape
+Version: 1.0.0
+Summary: A tool for scraping music information and creating Spotify playlists
+Home-page: https://github.com/88dreams/spotscrape
+Author: 88dreams
+License: MIT
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Dynamic: home-page
+Dynamic: requires-python
+
 # SpotScrape
 
 A Python tool for scraping music information from web pages and creating Spotify playlists.

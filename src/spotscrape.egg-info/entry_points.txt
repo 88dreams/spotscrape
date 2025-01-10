@@ -1,0 +1,3 @@
+[console_scripts]
+spotscrape = spotscrape.app:main
+spotscrape-gui = spotscrape.app:main
