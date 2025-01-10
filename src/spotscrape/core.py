@@ -1038,12 +1038,14 @@ async def scan_spotify_links(url: str, destination_file: str = None):
         logger.debug(f"Starting scan at: {scan_time}")
 
         # Extract content with progress indicator
-        user_message("\nExtracting webpage content...")
+        gui_message("\nExtracting webpage content...")
+        send_progress(10, "Extracting webpage content...")
         content = await extractor.extract_content(url)
         logger.debug(f"Content extracted, length: {len(content)} characters")
         
         # Clean HTML content
-        user_message("Processing webpage content...")
+        gui_message("Processing webpage content...")
+        send_progress(20, "Processing webpage content...")
         cleaned_content = clean_html_content(content)
         logger.debug(f"Content cleaned, length: {len(cleaned_content)} characters")
         
@@ -1062,59 +1064,67 @@ async def scan_spotify_links(url: str, destination_file: str = None):
         ]
         
         # Collect all unique album IDs with progress indicator
-        user_message("Scanning for Spotify album links...")
+        gui_message("Scanning for Spotify album links...")
+        send_progress(30, "Scanning for Spotify album links...")
         album_ids = set()
-        async with ProgressIndicator(len(spotify_patterns), desc="Scanning patterns", unit="pattern") as pbar:
-            for pattern in spotify_patterns:
-                matches = re.finditer(pattern, content, re.IGNORECASE)
-                for match in matches:
-                    # Extract the album ID from the capturing group
-                    album_id = match.group(1)
-                    if album_id and len(album_id) == 22:  # Spotify IDs are 22 characters
-                        album_ids.add(album_id)
-                        logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
-                pbar.update(1)
+        for i, pattern in enumerate(spotify_patterns):
+            progress = 30 + ((i + 1) / len(spotify_patterns) * 20)  # Progress from 30% to 50%
+            send_progress(int(progress), f"Scanning pattern {i + 1}/{len(spotify_patterns)}...")
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                # Extract the album ID from the capturing group
+                album_id = match.group(1)
+                if album_id and len(album_id) == 22:  # Spotify IDs are 22 characters
+                    album_ids.add(album_id)
+                    logger.debug(f"Found album ID: {album_id} using pattern: {pattern}")
 
-        user_message(f"\nFound {len(album_ids)} unique Spotify album links")
+        gui_message(f"\nFound {len(album_ids)} unique Spotify album links")
+        send_progress(50, f"Found {len(album_ids)} unique Spotify album links")
         
         # Process each album with progress indicator
         entries = []
         spotify = await ClientManager.get_spotify()
         
-        async with ProgressIndicator(len(album_ids), desc="Processing albums", unit="album") as pbar:
-            for album_id in album_ids:
-                try:
-                    album_info = spotify.album(album_id)
-                    entry = {
-                        'id': album_id,
-                        'artist': album_info['artists'][0]['name'],
-                        'name': album_info['name'],
-                        'popularity': album_info.get('popularity', 0),
-                        'images': album_info.get('images', []),
-                        'spotify_url': f"spotify:album:{album_id}",
-                        'source_url': url,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }
-                    entries.append(entry)
-                    pbar.set_description(f"Processing: {entry['artist']} - {entry['name']}")
-                except Exception as e:
-                    logger.error(f"Error processing album {album_id}: {str(e)}")
-                    continue
-                pbar.update(1)
+        for i, album_id in enumerate(album_ids):
+            progress = 50 + ((i + 1) / len(album_ids) * 45)  # Progress from 50% to 95%
+            try:
+                album_info = spotify.album(album_id)
+                entry = {
+                    'id': album_id,
+                    'artist': album_info['artists'][0]['name'],
+                    'name': album_info['name'],
+                    'popularity': album_info.get('popularity', 0),
+                    'images': album_info.get('images', []),
+                    'spotify_url': f"spotify:album:{album_id}",
+                    'source_url': url,
+                    'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                entries.append(entry)
+                gui_message(f"Processing album {i + 1}/{len(album_ids)}: {entry['artist']} - {entry['name']}")
+                send_progress(int(progress), f"Processing album {i + 1}/{len(album_ids)}: {entry['artist']} - {entry['name']}")
+            except Exception as e:
+                logger.error(f"Error processing album {album_id}: {str(e)}")
+                continue
         
         # Save results
         if entries:
             try:
+                send_progress(95, "Saving results...")
                 with open(destination_file, 'w', encoding='utf-8') as f:
                     json.dump(entries, f, indent=2, ensure_ascii=False)
                 logger.info(f"Saved {len(entries)} URL scan results to {destination_file}")
+                send_progress(100, f"Completed! Found {len(entries)} albums")
             except Exception as e:
                 logger.error(f"Error saving URL scan results: {e}")
+                send_progress(95, "Error saving results")
+        else:
+            send_progress(100, "Completed! No albums found")
         
         return entries
         
     except Exception as e:
         logger.error(f"Error in scan_spotify_links: {str(e)}")
+        send_progress(0, f"Error: {str(e)}")
         raise
     finally:
         # Ensure Playwright resources are cleaned up

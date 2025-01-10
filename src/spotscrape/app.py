@@ -193,6 +193,8 @@ async def scan_url():
             return jsonify({'status': 'error', 'error': 'No URL provided'}), 400
             
         debug_logger.info(f"Starting URL scan for: {url}")
+        gui_message(f"Starting URL scan for: {url}")
+        send_progress(0, "Initializing scan...")
         
         # Initialize components
         web_extractor = WebContentExtractor()
@@ -201,24 +203,31 @@ async def scan_url():
         try:
             # Extract content from URL
             debug_logger.info("Extracting content from URL...")
+            gui_message("Extracting content from URL...")
+            send_progress(10, "Extracting content from URL...")
             content = await web_extractor.extract_content(url)
             
             if not content:
                 error_msg = f"Failed to extract content from URL: {url}"
                 debug_logger.error(error_msg)
+                gui_message(error_msg, True)
+                send_progress(0, error_msg)
                 return jsonify({'status': 'error', 'error': error_msg}), 400
                 
             debug_logger.info(f"Successfully extracted content. Length: {len(content)}")
-            # Log a sample of the content for debugging
-            content_sample = content[:1000] + '...' if len(content) > 1000 else content
-            debug_logger.debug(f"Content sample:\n{content_sample}")
+            gui_message(f"Successfully extracted {len(content)} characters of content")
+            send_progress(20, "Content extracted successfully")
             
             # Scan for Spotify links
             debug_logger.info("Scanning for Spotify links...")
+            gui_message("Scanning for Spotify links...")
+            send_progress(30, "Scanning for Spotify links...")
             album_ids = await spotify_manager.scan_spotify_links(content)
             
             if not album_ids:
                 debug_logger.info("No Spotify album links found in content")
+                gui_message("No Spotify album links found in content")
+                send_progress(100, "No Spotify album links found")
                 return jsonify({
                     'status': 'complete',
                     'albums': [],
@@ -226,13 +235,19 @@ async def scan_url():
                 })
             
             debug_logger.info(f"Found {len(album_ids)} album IDs: {album_ids}")
+            gui_message(f"Found {len(album_ids)} Spotify album links")
+            send_progress(50, f"Found {len(album_ids)} Spotify album links")
             
             # Get album info for each ID
             albums = []
             total = len(album_ids)
             
             for i, album_id in enumerate(album_ids, 1):
+                progress = 50 + ((i / total) * 45)  # Progress from 50% to 95%
                 debug_logger.info(f"Getting info for album {i}/{total}, ID: {album_id}")
+                gui_message(f"Processing album {i}/{total}...")
+                send_progress(int(progress), f"Processing album {i}/{total}...")
+                
                 album_info = await spotify_manager.get_album_info(album_id)
                 
                 if album_info:
@@ -247,11 +262,16 @@ async def scan_url():
                         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     }
                     albums.append(formatted_album)
-                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']} at {formatted_album['timestamp']}")
+                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']}")
+                    gui_message(f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
+                    send_progress(int(progress), f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
                 else:
                     debug_logger.warning(f"Could not get info for album ID: {album_id}")
+                    gui_message(f"✗ Could not get info for album", True)
+                    send_progress(int(progress), f"✗ Could not get album info")
             
             debug_logger.info(f"Successfully retrieved info for {len(albums)} albums")
+            send_progress(95, "Saving results...")
             
             # Save results to file
             data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
@@ -262,8 +282,12 @@ async def scan_url():
                 with open(url_file, 'w', encoding='utf-8') as f:
                     json.dump(albums, f, indent=2, ensure_ascii=False)
                 debug_logger.info(f"Saved {len(albums)} URL scan results to {url_file}")
+                gui_message(f"Saved {len(albums)} albums to file")
+                send_progress(100, f"Completed! Found {len(albums)} albums")
             except Exception as e:
                 debug_logger.error(f"Error saving URL scan results: {e}")
+                gui_message("Error saving results to file", True)
+                send_progress(95, "Error saving results")
 
             # Return success response
             response_data = {
@@ -281,6 +305,8 @@ async def scan_url():
     except Exception as e:
         error_msg = f"Error during URL scan: {str(e)}"
         debug_logger.error(error_msg, exc_info=True)
+        gui_message(error_msg, True)
+        send_progress(0, f"Error: {str(e)}")
         return jsonify({'status': 'error', 'error': error_msg}), 500
 
 # Add after other logger setups
