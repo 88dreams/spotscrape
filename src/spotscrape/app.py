@@ -24,6 +24,7 @@ from functools import wraps
 from jinja2 import FileSystemLoader, Environment
 import atexit
 import time
+from spotscrape.message_handler import gui_message, send_progress, message_queue, progress_queue
 
 """
 File Structure:
@@ -155,34 +156,8 @@ scan_results = {
     'url': {'status': 'idle', 'albums': [], 'error': None}
 }
 
-# Add after other global variables
-message_queue = Queue()
-
-# Global progress queue for SSE
-progress_queue = Queue()
-
-# Modify the user_message function to send to GUI
-def gui_message(msg: str, log_only: bool = False):
-    """Send message to GUI and log it.
-    
-    Args:
-        msg (str): The message to send
-        log_only (bool): If True, only log the message without sending to GUI
-    """
-    debug_logger.info(f"GUI Message: {msg}")
-    if not log_only:
-        message_queue.put(msg)
-
 # Override the user_message in spotscrape
 spotscrape.user_message = gui_message
-
-def send_progress(progress, message):
-    """Helper function to send progress updates"""
-    progress_queue.put({
-        'progress': progress,
-        'message': message,
-        'timestamp': datetime.now().isoformat()
-    })
 
 def async_route(f):
     @wraps(f)
@@ -596,23 +571,38 @@ def debug_log():
 
 @app.route('/api/messages')
 def get_messages():
-    """Endpoint to get queued messages"""
-    messages = []
-    while not message_queue.empty():
-        messages.append(message_queue.get())
-    return jsonify({'messages': messages})
-
-@app.route('/api/playlist-progress')
-def playlist_progress():
+    """SSE endpoint for real-time messages"""
     def generate():
         while True:
             try:
-                progress_data = progress_queue.get(timeout=30)  # 30 second timeout
-                yield f"data: {json.dumps(progress_data)}\n\n"
-            except Queue.Empty:
-                # Send a keepalive message
-                yield f"data: {json.dumps({'keepalive': True})}\n\n"
-    
+                # Get message from queue with timeout
+                message = message_queue.get(timeout=1)
+                yield f"data: {json.dumps({'message': message})}\n\n"
+            except Empty:
+                # Send heartbeat to keep connection alive
+                yield ": heartbeat\n\n"
+            except Exception as e:
+                logger.error(f"Error in message stream: {e}")
+                break
+
+    return Response(generate(), mimetype='text/event-stream')
+
+@app.route('/api/progress')
+def get_progress():
+    """SSE endpoint for real-time progress updates"""
+    def generate():
+        while True:
+            try:
+                # Get progress update from queue with timeout
+                progress = progress_queue.get(timeout=1)
+                yield f"data: {json.dumps(progress)}\n\n"
+            except Empty:
+                # Send heartbeat to keep connection alive
+                yield ": heartbeat\n\n"
+            except Exception as e:
+                logger.error(f"Error in progress stream: {e}")
+                break
+
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/scan-webpage', methods=['POST'])

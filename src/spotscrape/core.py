@@ -37,10 +37,11 @@ import threading
 from tqdm import tqdm
 
 # Internal imports
-from .utils import setup_logging, user_message
-from .spotify_manager import SpotifySearchManager
-from .web_extractor import WebContentExtractor
-from .content_processor import ContentProcessor
+from spotscrape.utils import setup_logging
+from spotscrape.spotify_manager import SpotifySearchManager
+from spotscrape.web_extractor import WebContentExtractor
+from spotscrape.content_processor import ContentProcessor
+from spotscrape.message_handler import gui_message, send_progress, progress_queue
 
 # Initialize logger
 logger = logging.getLogger(__name__)
@@ -689,20 +690,32 @@ def clean_html_content(content: str) -> str:
         logger.error(f"Error cleaning HTML content: {e}")
         return content
 
+def send_progress(progress: int, message: str):
+    """Send progress update to frontend"""
+    progress_queue.put({
+        'progress': progress,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    })
+
 async def process_with_gpt(content: str) -> str:
     """Process content with GPT to extract artist and album information"""
     gpt_logger = logging.getLogger('spot-gpt')
     try:
         gpt_logger.debug("Initializing OpenAI client")
+        send_progress(10, "Initializing GPT client...")
         openai_client = await ClientManager.get_openai()
         if not openai_client:
             gpt_logger.error("Failed to initialize OpenAI client")
+            gui_message("Failed to initialize GPT client", True)
             raise Exception("Failed to initialize OpenAI client")
 
         gpt_logger.debug("Cleaning content for GPT processing")
+        send_progress(20, "Cleaning content for analysis...")
         cleaned_content = clean_html_content(content)
         if not cleaned_content:
             gpt_logger.error("Content cleaning resulted in empty text")
+            gui_message("No content to analyze after cleaning", True)
             raise Exception("No content to process after cleaning")
 
         # Ensure content is properly encoded
@@ -710,17 +723,24 @@ async def process_with_gpt(content: str) -> str:
         gpt_logger.debug(f"Content encoded successfully. Length: {len(cleaned_content)}")
 
         gpt_logger.debug(f"Splitting content into chunks (content length: {len(cleaned_content)})")
+        send_progress(30, "Preparing content for analysis...")
         chunks = textwrap.wrap(cleaned_content, 4000, break_long_words=False, break_on_hyphens=False)
         if not chunks:
             gpt_logger.error("No content chunks created")
+            gui_message("Failed to prepare content for analysis", True)
             raise Exception("No content chunks created for processing")
 
-        gpt_logger.debug(f"Processing {len(chunks)} chunks with GPT")
+        total_chunks = len(chunks)
+        gui_message(f"Processing content in {total_chunks} chunks...")
+        send_progress(40, f"Starting analysis of {total_chunks} content chunks...")
         all_results = []
         
         for i, chunk in enumerate(chunks, 1):
             try:
-                gpt_logger.debug(f"Processing chunk {i}/{len(chunks)}")
+                progress = 40 + (i / total_chunks * 30)  # Progress from 40% to 70%
+                gui_message(f"Analyzing chunk {i}/{total_chunks}...")
+                send_progress(int(progress), f"Analyzing chunk {i} of {total_chunks}...")
+                gpt_logger.debug(f"Processing chunk {i}/{total_chunks}")
                 
                 # Ensure chunk is properly encoded
                 chunk = chunk.encode('utf-8', errors='ignore').decode('utf-8')
@@ -757,6 +777,7 @@ async def process_with_gpt(content: str) -> str:
 
                 if not response or not hasattr(response.choices[0], 'message'):
                     gpt_logger.error(f"Invalid response from OpenAI: {response}")
+                    gui_message(f"Error analyzing chunk {i}/{total_chunks}", True)
                     continue
 
                 result = response.choices[0].message.content.strip()
@@ -776,15 +797,23 @@ async def process_with_gpt(content: str) -> str:
                             valid_pairs.append(f"{artist} - {album}")
                     all_results.extend(valid_pairs)
                     gpt_logger.debug(f"Found {len(valid_pairs)} valid pairs in chunk {i}")
+                    gui_message(f"Found {len(valid_pairs)} albums in chunk {i}")
+                    send_progress(int(progress), f"Found {len(valid_pairs)} albums in chunk {i}")
                 else:
                     gpt_logger.warning(f"No results found in chunk {i}")
+                    gui_message(f"No albums found in chunk {i}")
+                    send_progress(int(progress), f"No albums found in chunk {i}")
 
             except Exception as e:
                 gpt_logger.error(f"Error processing chunk {i}: {str(e)}", exc_info=True)
+                gui_message(f"Error processing chunk {i}: {str(e)}", True)
+                send_progress(int(progress), f"Error in chunk {i}: {str(e)}")
                 continue
 
         if not all_results:
             gpt_logger.warning("No artist-album pairs found in any chunks")
+            gui_message("No albums found in any content chunks")
+            send_progress(70, "No albums found in content")
             return ""
 
         # Remove duplicates while preserving order
@@ -792,14 +821,18 @@ async def process_with_gpt(content: str) -> str:
         final_results = [item for item in all_results if item and item not in seen and not seen.add(item)]
         
         gpt_logger.info(f"Found {len(final_results)} unique artist-album pairs")
-        gpt_logger.debug(f"Final results: {final_results}")
+        gui_message(f"\nFound {len(final_results)} unique albums")
+        send_progress(80, f"Found {len(final_results)} unique albums")
         
         # Ensure final output is properly encoded
         final_output = '\n'.join(final_results).encode('utf-8', errors='ignore').decode('utf-8')
+        send_progress(90, "Preparing final results...")
         return final_output
 
     except Exception as e:
         gpt_logger.error(f"Error in process_with_gpt: {str(e)}", exc_info=True)
+        gui_message(f"Error in GPT processing: {str(e)}", True)
+        send_progress(0, f"Error: {str(e)}")
         raise
 
 class ContentProcessor:
@@ -1093,19 +1126,28 @@ async def scan_webpage(url: str, destination_file: str) -> List[Dict[str, Any]]:
     try:
         # Extract content
         web_extractor = WebContentExtractor()
+        gui_message("Initializing web content extraction...")
+        send_progress(5, "Initializing web content extraction...")
         content = await web_extractor.extract_content(url)
         
         if not content:
             gpt_logger.error("No content could be extracted from the webpage")
+            gui_message("Failed to extract content from webpage", True)
+            send_progress(0, "Failed to extract content from webpage")
             return []
             
         gpt_logger.info(f"Content extracted successfully ({len(content)} characters)")
+        gui_message(f"Successfully extracted {len(content)} characters of content")
+        send_progress(10, "Content extracted successfully")
         
         # Process with GPT
+        gui_message("Starting GPT analysis of content...")
         gpt_results = await process_with_gpt(content)
         
         if not gpt_results:
             gpt_logger.warning("No results found by GPT")
+            gui_message("No music content found by GPT analysis")
+            send_progress(90, "No music content found")
             return []
             
         # Process each result with Spotify
@@ -1114,14 +1156,21 @@ async def scan_webpage(url: str, destination_file: str) -> List[Dict[str, Any]]:
         
         # Split the GPT results into individual pairs
         pairs = [pair.strip() for pair in gpt_results.split('\n') if pair.strip()]
+        total_pairs = len(pairs)
+        gui_message(f"\nFound {total_pairs} potential albums to process")
+        send_progress(90, f"Processing {total_pairs} albums with Spotify...")
         
-        for pair in pairs:
+        for i, pair in enumerate(pairs, 1):
+            progress = 90 + (i / total_pairs * 8)  # Progress from 90% to 98%
             if ' - ' not in pair:
                 continue
                 
             artist, album = pair.split(' - ', 1)
             artist = artist.strip()
             album = album.strip()
+            
+            gui_message(f"Processing album {i}/{total_pairs}: {artist} - {album}")
+            send_progress(int(progress), f"Processing album {i}/{total_pairs}...")
             
             try:
                 # Search for the album on Spotify
@@ -1147,30 +1196,46 @@ async def scan_webpage(url: str, destination_file: str) -> List[Dict[str, Any]]:
                     }
                     results.append(formatted_album)
                     gpt_logger.info(f"Found album: {artist} - {album}")
+                    gui_message(f"✓ Found on Spotify: {artist} - {album}")
+                    send_progress(int(progress), f"✓ Found: {artist} - {album}")
+                else:
+                    gui_message(f"✗ Not found on Spotify: {artist} - {album}")
+                    send_progress(int(progress), f"✗ Not found: {artist} - {album}")
             except Exception as e:
                 gpt_logger.error(f"Error processing album {artist} - {album}: {str(e)}")
+                gui_message(f"✗ Error processing: {artist} - {album}")
+                send_progress(int(progress), f"✗ Error: {artist} - {album}")
                 continue
-        
+
         if results:
             # Save results to file
             try:
                 # Ensure the directory exists
                 os.makedirs(os.path.dirname(destination_file), exist_ok=True)
+                send_progress(98, "Saving results...")
                 
                 # Write the results to the specified destination file
                 with open(destination_file, 'w', encoding='utf-8') as f:
                     json.dump(results, f, indent=2, ensure_ascii=False)
                 gpt_logger.info(f"Saved {len(results)} GPT scan results to {destination_file}")
+                gui_message(f"\nSuccessfully saved {len(results)} albums to file")
+                send_progress(100, f"Completed! Found {len(results)} albums")
             except Exception as e:
                 gpt_logger.error(f"Error saving GPT scan results: {e}")
+                gui_message("Error saving results to file", True)
+                send_progress(98, "Error saving results")
         else:
             gpt_logger.warning("No albums found to save")
+            gui_message("No albums were found to save")
+            send_progress(100, "Completed! No albums found")
         
         # Return the results regardless of whether file save was successful
         return results
         
     except Exception as e:
         gpt_logger.error(f"Error during webpage scan: {str(e)}", exc_info=True)
+        gui_message(f"Error during scan: {str(e)}", True)
+        send_progress(0, f"Error: {str(e)}")
         return []
     finally:
         # Clean up resources

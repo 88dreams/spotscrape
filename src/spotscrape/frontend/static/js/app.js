@@ -16,6 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
         ENDPOINTS: {
             DEBUG_LOG: '/api/debug-log',
             MESSAGES: '/api/messages',
+            PROGRESS: '/api/progress',
             SCAN_URL: '/api/scan-url',
             SCAN_GPT: '/api/scan-webpage',
             CREATE_PLAYLIST: '/api/create-playlist',
@@ -301,51 +302,162 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         },
 
-        startMessagePolling(initialDelay = CONFIG.POLLING.MIN_DELAY) {
-            if (state.isPolling) return;
-            state.setPolling(true);
-            let delay = initialDelay;
+        startMessagePolling() {
+            if (this.messageSource) return;
             
+            this.messageSource = new EventSource(CONFIG.ENDPOINTS.MESSAGES);
+            this.messageSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.message) {
+                    this.addMessage(data.message);
+                }
+            };
+            
+            this.progressSource = new EventSource(CONFIG.ENDPOINTS.PROGRESS);
+            this.progressSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.progress !== undefined && data.message) {
+                    this.updateProgress(data.progress, data.message);
+                }
+            };
+        },
+
+        stopMessagePolling() {
+            if (this.messageSource) {
+                this.messageSource.close();
+                this.messageSource = null;
+            }
+            if (this.progressSource) {
+                this.progressSource.close();
+                this.progressSource = null;
+            }
+        },
+
+        async pollForResults() {
+            let delay = CONFIG.POLLING.MIN_DELAY;
+            let pollTimeout;
+
             const poll = async () => {
-                if (!state.isPolling) return;
-                
                 try {
-                    const response = await fetch(CONFIG.ENDPOINTS.MESSAGES);
+                    const response = await fetch(CONFIG.ENDPOINTS.GPT_RESULTS);
                     const data = await response.json();
                     
-                    if (data.messages?.length > 0) {
-                        const fragment = document.createDocumentFragment();
-                        data.messages.forEach(message => {
-                            const messageElement = templates.message.content.cloneNode(true).firstElementChild;
-                            messageElement.textContent = message;
-                            messageElement.classList.add('success');
-                            fragment.appendChild(messageElement);
-                        });
-                        
-                        requestAnimationFrame(() => {
-                            elements.messagesDiv.appendChild(fragment);
-                            elements.messagesDiv.scrollTop = elements.messagesDiv.scrollHeight;
-                        });
-                        
-                        delay = initialDelay;
-                    } else {
-                        delay = Math.min(delay * CONFIG.POLLING.BACKOFF_RATE, CONFIG.POLLING.MAX_DELAY);
+                    if (data.status === 'complete') {
+                        if (data.albums) {
+                            this.updateAlbumsList(data.albums);
+                            this.toggleProgress(false);
+                        } else {
+                            throw new Error('No albums found');
+                        }
+                        return;
+                    } else if (data.status === 'error') {
+                        throw new Error(data.error || 'Search failed');
                     }
-                } catch (error) {
-                    console.error('Error polling messages:', error);
+                    
                     delay = Math.min(delay * CONFIG.POLLING.BACKOFF_RATE, CONFIG.POLLING.MAX_DELAY);
-                }
-
-                if (state.isPolling) {
-                    state.pollMessageTimeout = setTimeout(poll, delay);
+                    pollTimeout = setTimeout(poll, delay);
+                    
+                } catch (error) {
+                    console.error('Polling error:', error);
+                    this.addMessage('Error during search: ' + error.message, true);
+                    this.updateAlbumsList([]);
+                    this.toggleProgress(false);
                 }
             };
 
             poll();
+            return () => pollTimeout && clearTimeout(pollTimeout);
         },
 
-        stopMessagePolling() {
-            state.setPolling(false);
+        async handleCreatePlaylist() {
+            if (state.playlistCreationInProgress) return;
+
+        if (state.getSelectedAlbumsCount() === 0) {
+                ui.addMessage('Please select at least one album', true);
+            return;
+        }
+
+        state.setPlaylistCreationStatus(true);
+            elements.createPlaylistButton.disabled = true;
+            elements.createPlaylistButton.textContent = 'Creating...';
+            ui.toggleProgress(true);
+            ui.updateProgress(0, 'Starting playlist creation...');
+
+            try {
+                const response = await fetch(CONFIG.ENDPOINTS.CREATE_PLAYLIST, {
+                method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    albums: state.getSelectedAlbumsArray(),
+                        playlistName: elements.playlistName.value || this.getDefaultPlaylistName(),
+                        playlistDescription: elements.playlistDescription.value,
+                        includeAllTracks: elements.allTracksSwitch.checked,
+                        includePopularTracks: elements.popularTracksSwitch.checked
+                })
+            });
+
+                if (!response.ok) throw new Error('Failed to create playlist');
+
+            const data = await response.json();
+                if (data.error) throw new Error(data.error);
+
+                this.showCompletionPopup('Playlist created successfully!');
+                ui.addMessage('Playlist created successfully!');
+                elements.createPlaylistButton.disabled = false;
+                elements.createPlaylistButton.textContent = 'GO';
+
+        } catch (error) {
+            console.error('Playlist creation error:', error);
+                ui.addMessage('Error creating playlist: ' + error.message, true);
+                elements.createPlaylistButton.disabled = false;
+                elements.createPlaylistButton.textContent = 'GO';
+        } finally {
+            state.setPlaylistCreationStatus(false);
+                ui.toggleProgress(false);
+            }
+        },
+
+        handleTrackTypeChange(event) {
+            const isAllTracks = event.target === elements.allTracksSwitch;
+            const otherSwitch = isAllTracks ? elements.popularTracksSwitch : elements.allTracksSwitch;
+        
+        if (event.target.checked) {
+            otherSwitch.checked = false;
+        }
+        },
+
+        resetSearch() {
+            elements.urlInput.value = '';
+            elements.searchButton.textContent = 'Search';
+            elements.searchButton.classList.remove('reset');
+            elements.searchButton.onclick = this.handleSearch;
+            elements.messagesDiv.innerHTML = '';
+        },
+
+        isValidUrl(string) {
+            try {
+                new URL(string);
+                return true;
+            } catch (_) {
+                return false;
+            }
+        },
+
+        getDefaultPlaylistName() {
+        let domain = 'unknown-domain';
+        try {
+            if (state.currentUrl) {
+                const url = new URL(state.currentUrl);
+                domain = url.hostname.replace('www.', '');
+            }
+        } catch (error) {
+            console.error('Invalid URL:', state.currentUrl);
+        }
+            return `${domain} - ${new Date().toLocaleString()}`;
+        },
+
+        showCompletionPopup(message) {
+            alert(message);
         }
     };
 
