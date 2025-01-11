@@ -31,19 +31,35 @@
 
                 <!-- URL Input -->
                 <div class="flex gap-2">
-                    <input type="url" 
-                           id="urlInput" 
-                           name="url"
-                           required 
-                           pattern="https?://.+" 
-                           placeholder="Enter URL" 
-                           aria-label="Enter URL to search for albums"
-                           class="input-field"
-                           autocomplete="url">
+                    <div class="relative flex-1">
+                        <input type="url" 
+                               id="urlInput" 
+                               name="url"
+                               required 
+                               pattern="https?://.+" 
+                               placeholder="Enter URL" 
+                               aria-label="Enter URL to search for albums"
+                               class="input-field"
+                               autocomplete="url">
+                        <button id="historyDropdownButton" 
+                                class="history-toggle"
+                                aria-label="Show search history"
+                                type="button">
+                            <span class="history-icon">▾</span>
+                        </button>
+                    </div>
                     <button type="submit" 
                             id="searchButton" 
                             class="button-3d"
                             aria-label="Start search">Search</button>
+                </div>
+                <!-- Move dropdown outside the input container -->
+                <div id="historyDropdown" class="history-dropdown hidden">
+                    <div class="history-header">
+                        <h3>Recent Searches</h3>
+                        <button class="clear-history" aria-label="Clear history">Clear</button>
+                    </div>
+                    <ul class="history-list"></ul>
                 </div>
             </form>
         </section>
@@ -83,6 +99,10 @@
                     <span class="select-all-text">Deselect All</span>
                 </button>
             </div>
+
+            <!-- Filter Controls -->
+            <div class="filter-container mb-4"></div>
+
             <div id="albumsList" 
                  class="albums-grid"
                  role="grid"
