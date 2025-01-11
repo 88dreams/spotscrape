@@ -363,7 +363,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Elements cache with validation
     const elements = {
         urlInput: document.getElementById('urlInput'),
-        searchButton: document.getElementById('searchButton'),
+        urlSearchButton: document.getElementById('urlSearchButton'),
+        gptSearchButton: document.getElementById('gptSearchButton'),
         albumsList: document.getElementById('albumsList'),
         allTracksSwitch: document.getElementById('allTracksSwitch'),
         popularTracksSwitch: document.getElementById('popularTracksSwitch'),
@@ -375,14 +376,14 @@ document.addEventListener('DOMContentLoaded', function() {
         progressBar: document.getElementById('progressBar'),
         progressText: document.getElementById('progressText'),
         progressPercent: document.getElementById('progressPercent'),
-        searchMethodRadios: document.querySelectorAll('input[name="searchMethod"]'),
         toggleSelectAll: document.getElementById('toggleSelectAll')
     };
 
     // Validate critical elements
-    if (!elements.searchButton || !elements.urlInput) {
+    if (!elements.urlSearchButton || !elements.gptSearchButton || !elements.urlInput) {
         console.error('Critical elements missing:', {
-            searchButton: !!elements.searchButton,
+            urlSearchButton: !!elements.urlSearchButton,
+            gptSearchButton: !!elements.gptSearchButton,
             urlInput: !!elements.urlInput
         });
         return;
@@ -650,10 +651,10 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (allSelected) {
                 button.classList.remove('none-selected');
-                textSpan.textContent = 'Deselect All';
+                textSpan.textContent = 'DESELECT ALL';
             } else {
                 button.classList.add('none-selected');
-                textSpan.textContent = 'Select All';
+                textSpan.textContent = 'SELECT ALL';
             }
         },
 
@@ -683,7 +684,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     albumsList.innerHTML = '';
                 }
                 if (elements.toggleSelectAll) {
-                    elements.toggleSelectAll.classList.remove('visible');
+                    elements.toggleSelectAll.style.display = 'none';
+                }
+                // Hide filter controls when no albums
+                const filterContainer = document.querySelector('.filter-container');
+                if (filterContainer) {
+                    filterContainer.style.display = 'none';
                 }
                 return;
             }
@@ -696,6 +702,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const fragment = document.createDocumentFragment();
             albumsList.innerHTML = '';
+
+            // Show filter controls and select all button when there are albums
+            if (elements.toggleSelectAll) {
+                elements.toggleSelectAll.style.display = 'flex';
+            }
+            const filterContainer = document.querySelector('.filter-container');
+            if (filterContainer) {
+                filterContainer.style.display = 'block';
+            }
 
             if (elements.toggleSelectAll) {
                 elements.toggleSelectAll.classList.add('visible');
@@ -1148,21 +1163,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Event handlers with debouncing and throttling
     const handlers = {
-        async handleSearch() {
+        async handleSearch(searchMethod) {
             try {
                 const url = elements.urlInput.value.trim();
                 if (!this.isValidUrl(url)) {
                     ui.addMessage('Please enter a valid URL', true);
-                    elements.searchButton.textContent = 'Clear';
-                    elements.searchButton.onclick = () => {
-                        elements.urlInput.value = '';
-                        elements.searchButton.textContent = 'Search';
-                        elements.searchButton.onclick = handlers.handleSearch.bind(handlers);
-                    };
                     return;
                 }
 
-                const searchMethod = Array.from(elements.searchMethodRadios).find(radio => radio.checked)?.value;
                 state.setUrl(url);
                 state.addToSearchHistory(url, searchMethod);
                 ui.updateSearchHistory();
@@ -1334,7 +1342,8 @@ document.addEventListener('DOMContentLoaded', function() {
         // Debounced URL validation
         const debouncedUrlValidation = utils.debounce((url) => {
             const isValid = handlers.isValidUrl(url);
-            elements.searchButton.disabled = !isValid;
+            elements.urlSearchButton.disabled = !isValid;
+            elements.gptSearchButton.disabled = !isValid;
             if (!isValid && url.length > 0) {
                 ui.addMessage('Please enter a valid URL', true);
             }
@@ -1346,15 +1355,20 @@ document.addEventListener('DOMContentLoaded', function() {
             debouncedUrlValidation(url);
         });
 
-        // Optimized search button handler
-        elements.searchButton.addEventListener('click', utils.debounce(() => {
-            handlers.handleSearch.bind(handlers)();
+        // URL Search button handler
+        elements.urlSearchButton.addEventListener('click', utils.debounce(() => {
+            handlers.handleSearch.bind(handlers)('url');
+        }, CONFIG.UI.DEBOUNCE_DELAY));
+
+        // GPT Search button handler
+        elements.gptSearchButton.addEventListener('click', utils.debounce(() => {
+            handlers.handleSearch.bind(handlers)('gpt');
         }, CONFIG.UI.DEBOUNCE_DELAY));
 
         // Enter key handler with debounce
         elements.urlInput.addEventListener('keypress', utils.debounce((e) => {
-            if (e.key === 'Enter' && !elements.searchButton.disabled) {
-                handlers.handleSearch.bind(handlers)();
+            if (e.key === 'Enter' && !elements.urlSearchButton.disabled) {
+                handlers.handleSearch.bind(handlers)('url');
             }
         }, CONFIG.UI.DEBOUNCE_DELAY));
 
@@ -1370,7 +1384,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Optimized select all toggle handler
         if (elements.toggleSelectAll) {
             elements.toggleSelectAll.addEventListener('click', utils.debounce(() => {
-                const isSelectingAll = elements.toggleSelectAll.querySelector('.select-all-text').textContent === 'Select All';
+                const isSelectingAll = elements.toggleSelectAll.querySelector('.select-all-text').textContent === 'SELECT ALL';
                 ui.toggleAllAlbums(isSelectingAll);
             }, CONFIG.UI.DEBOUNCE_DELAY));
         }

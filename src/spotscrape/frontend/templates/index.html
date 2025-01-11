@@ -10,59 +10,133 @@
 </head>
 <body class="bg-gray-100">
     <main class="container mx-auto p-4">
-        <h1 class="text-3xl font-bold text-center mb-4">SpotScrape</h1>
-        
-        <!-- Search Section -->
-        <section class="card" aria-labelledby="search-section">
-            <h2 id="search-section" class="section-title">Search</h2>
-            <form id="searchForm" class="space-y-4" onsubmit="return false;">
-                <!-- Search Method Selection -->
-                <fieldset class="search-method-group">
-                    <legend class="sr-only">Select Search Method</legend>
-                    <label>
-                        <input type="radio" name="searchMethod" value="url" checked>
-                        <span class="ml-2">URL Search</span>
-                    </label>
-                    <label>
-                        <input type="radio" name="searchMethod" value="gpt">
-                        <span class="ml-2">GPT Search</span>
-                    </label>
-                </fieldset>
+        <!-- Top Sections Container -->
+        <div class="top-sections-container">
+            <!-- Left Column Container -->
+            <div class="flex flex-col" style="flex: 1;">
+                <!-- Info Section -->
+                <section class="card info-section" style="flex: 1; margin-bottom: 1rem;">
+                    <div class="intro-content">
+                        <h1 class="app-title">SpotScraper</h1>
+                        <p class="intro-text">Welcome! Paste a URL, choose a search method, and let the app find Spotify links or identify artist/album combos with ChatGPT. Then, create a playlist by selecting all tracks or just the most popular ones from each album. Simple and efficient!</p>
+                    </div>
+                </section>
 
-                <!-- URL Input -->
-                <div class="flex gap-2">
-                    <div class="relative flex-1">
-                        <input type="url" 
-                               id="urlInput" 
-                               name="url"
-                               required 
-                               pattern="https?://.+" 
-                               placeholder="Enter URL" 
-                               aria-label="Enter URL to search for albums"
-                               class="input-field"
-                               autocomplete="url">
-                        <button id="historyDropdownButton" 
-                                class="history-toggle"
-                                aria-label="Show search history"
-                                type="button">
-                            <span class="history-icon">▾</span>
-                        </button>
+                <!-- Search Section -->
+                <section class="card search-section" style="flex: 1;" aria-labelledby="search-section">
+                    <h2 id="search-section" class="section-title">Search</h2>
+                    <form id="searchForm" class="space-y-4" onsubmit="return false;">
+                        <!-- URL Input -->
+                        <div class="url-input-container">
+                            <div class="relative flex-1">
+                                <input type="url" 
+                                       id="urlInput" 
+                                       name="url"
+                                       required 
+                                       pattern="https?://.+" 
+                                       placeholder="Enter URL" 
+                                       aria-label="Enter URL to search for albums"
+                                       class="input-field"
+                                       autocomplete="url">
+                                <button id="historyDropdownButton" 
+                                        class="history-toggle"
+                                        aria-label="Show search history"
+                                        type="button">
+                                    <span class="history-icon">▾</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Move dropdown outside the input container -->
+                        <div id="historyDropdown" class="history-dropdown hidden">
+                            <div class="history-header">
+                                <h3>Recent Searches</h3>
+                                <button class="clear-history" aria-label="Clear history">Clear</button>
+                            </div>
+                            <ul class="history-list"></ul>
+                        </div>
+                        <div class="search-button-container flex justify-center gap-4">
+                            <button type="button" 
+                                    id="urlSearchButton" 
+                                    class="button-3d text-sm"
+                                    style="min-width: 100px; height: 32px; display: flex; align-items: center; justify-content: center; background-color: var(--color-primary);"
+                                    aria-label="Start URL search">URL SEARCH</button>
+                            <button type="button" 
+                                    id="gptSearchButton" 
+                                    class="button-3d text-sm"
+                                    style="min-width: 100px; height: 32px; display: flex; align-items: center; justify-content: center; background-color: var(--color-primary);"
+                                    aria-label="Start GPT search">GPT SEARCH</button>
+                        </div>
+                    </form>
+                </section>
+            </div>
+
+            <!-- Playlist Creation Section -->
+            <section class="card playlist-section" aria-labelledby="playlist-section">
+                <h2 id="playlist-section" class="section-title">Create Playlist</h2>
+                <form id="playlistForm">
+                    <!-- Track Selection Options -->
+                    <div class="track-options">
+                        <div class="track-option">
+                            <label for="allTracksSwitch" class="cursor-pointer">All Tracks</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" 
+                                       id="allTracksSwitch" 
+                                       name="allTracks"
+                                       checked>
+                                <span class="toggle-slider" 
+                                      role="switch" 
+                                      aria-checked="true"></span>
+                            </label>
+                        </div>
+                        <div class="track-option">
+                            <label for="popularTracksSwitch" class="cursor-pointer">Most Popular Track Only</label>
+                            <label class="toggle-switch">
+                                <input type="checkbox" 
+                                       id="popularTracksSwitch"
+                                       name="popularTracks">
+                                <span class="toggle-slider" 
+                                      role="switch" 
+                                      aria-checked="false"></span>
+                            </label>
+                        </div>
                     </div>
-                    <button type="submit" 
-                            id="searchButton" 
-                            class="button-3d"
-                            aria-label="Start search">Search</button>
-                </div>
-                <!-- Move dropdown outside the input container -->
-                <div id="historyDropdown" class="history-dropdown hidden">
-                    <div class="history-header">
-                        <h3>Recent Searches</h3>
-                        <button class="clear-history" aria-label="Clear history">Clear</button>
+
+                    <!-- Playlist Details -->
+                    <div class="playlist-fields">
+                        <div>
+                            <label for="playlistName">Playlist Name</label>
+                            <input type="text" 
+                                   id="playlistName" 
+                                   name="playlistName"
+                                   placeholder="Enter playlist name" 
+                                   class="input-field"
+                                   maxlength="100"
+                                   required>
+                        </div>
+                        <div>
+                            <label for="playlistDescription">Description</label>
+                            <textarea id="playlistDescription" 
+                                      name="playlistDescription"
+                                      placeholder="Enter playlist description" 
+                                      class="input-field"
+                                      maxlength="300"
+                                      rows="1"
+                                      style="resize: none; height: 38px; padding-top: 8px; padding-bottom: 8px; min-height: 38px; max-height: 38px; overflow-y: hidden;"></textarea>
+                        </div>
                     </div>
-                    <ul class="history-list"></ul>
-                </div>
-            </form>
-        </section>
+
+                    <!-- Submit Button -->
+                    <div class="text-center">
+                        <button type="submit" 
+                                id="createPlaylistButton" 
+                                class="button-3d create-button text-sm"
+                                aria-label="Create playlist"
+                                style="min-width: 100px; height: 32px; display: flex; align-items: center; justify-content: center; background-color: var(--color-success);">GO</button>
+                    </div>
+                </form>
+            </section>
+        </div>
 
         <!-- Progress Section -->
         <section id="progressContainer" class="card hidden" aria-live="polite">
@@ -79,6 +153,27 @@
             </div>
         </section>
 
+        <!-- Albums Section -->
+        <section class="card" aria-labelledby="albums-section">
+            <div class="flex justify-between items-center mb-4">
+                <h2 id="albums-section" class="section-title mb-0">Albums + Artists</h2>
+                <button id="toggleSelectAll" 
+                        class="select-all-button text-sm"
+                        style="min-width: 100px; height: 32px; display: none; align-items: center; justify-content: center; background-color: var(--color-primary);"
+                        aria-label="Toggle select all albums">
+                    <span class="select-all-text">DESELECT ALL</span>
+                </button>
+            </div>
+
+            <!-- Filter Controls -->
+            <div class="filter-container mb-4" style="display: none;"></div>
+
+            <div id="albumsList" 
+                 class="albums-grid"
+                 role="grid"
+                 aria-label="Found albums and artists"></div>
+        </section>
+
         <!-- Messages Section -->
         <section class="card" aria-labelledby="messages-section">
             <h2 id="messages-section" class="section-title">Messages</h2>
@@ -89,116 +184,32 @@
                  aria-relevant="additions"></div>
         </section>
 
-        <!-- Albums Section -->
-        <section class="card" aria-labelledby="albums-section">
-            <div class="flex justify-between items-center mb-4">
-                <h2 id="albums-section" class="section-title mb-0">Albums + Artists</h2>
-                <button id="toggleSelectAll" 
-                        class="select-all-button"
-                        aria-label="Toggle select all albums">
-                    <span class="select-all-text">Deselect All</span>
-                </button>
+        <!-- Templates -->
+        <template id="message">
+            <div class="message"></div>
+        </template>
+
+        <template id="albumCard">
+            <div class="album-card">
+                <div class="album-card-inner">
+                    <input type="checkbox" class="album-checkbox" aria-label="Select album">
+                    <img class="album-thumbnail" src="" alt="" loading="lazy">
+                    <div class="album-info">
+                        <div class="tooltip-container">
+                            <div class="album-title text-truncate"></div>
+                            <span class="tooltip-text"></span>
+                        </div>
+                        <div class="tooltip-container">
+                            <div class="album-artist text-truncate"></div>
+                            <span class="tooltip-text"></span>
+                        </div>
+                        <div class="album-popularity text-sm"></div>
+                    </div>
+                </div>
+                <button class="spotify-play-button" aria-label="Open in Spotify"></button>
             </div>
-
-            <!-- Filter Controls -->
-            <div class="filter-container mb-4"></div>
-
-            <div id="albumsList" 
-                 class="albums-grid"
-                 role="grid"
-                 aria-label="Found albums and artists"></div>
-        </section>
-
-        <!-- Playlist Creation Section -->
-        <section class="card" aria-labelledby="playlist-section">
-            <h2 id="playlist-section" class="section-title">Create Playlist</h2>
-            <form id="playlistForm" class="space-y-4">
-                <!-- Track Selection Options -->
-                <div class="space-y-2">
-                    <div class="flex justify-between">
-                        <label for="allTracksSwitch" class="cursor-pointer">All Tracks</label>
-                        <label class="toggle-switch">
-                            <input type="checkbox" 
-                                   id="allTracksSwitch" 
-                                   name="allTracks"
-                                   checked>
-                            <span class="toggle-slider" 
-                                  role="switch" 
-                                  aria-checked="true"></span>
-                        </label>
-                    </div>
-                    <div class="flex justify-between">
-                        <label for="popularTracksSwitch" class="cursor-pointer">Most Popular Track Only</label>
-                        <label class="toggle-switch">
-                            <input type="checkbox" 
-                                   id="popularTracksSwitch"
-                                   name="popularTracks">
-                            <span class="toggle-slider" 
-                                  role="switch" 
-                                  aria-checked="false"></span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- Playlist Details -->
-                <div class="space-y-2">
-                    <div>
-                        <label for="playlistName">Playlist Name</label>
-                        <input type="text" 
-                               id="playlistName" 
-                               name="playlistName"
-                               placeholder="Enter playlist name" 
-                               class="input-field"
-                               maxlength="100"
-                               required>
-                    </div>
-                    <div>
-                        <label for="playlistDescription">Description</label>
-                        <textarea id="playlistDescription" 
-                                  name="playlistDescription"
-                                  placeholder="Enter playlist description" 
-                                  class="input-field"
-                                  maxlength="300"
-                                  rows="3"></textarea>
-                    </div>
-                </div>
-
-                <!-- Submit Button -->
-                <div class="text-center">
-                    <button type="submit" 
-                            id="createPlaylistButton" 
-                            class="button-3d create-button"
-                            aria-label="Create playlist">GO</button>
-                </div>
-            </form>
-        </section>
+        </template>
     </main>
-
-    <!-- Templates -->
-    <template id="message">
-        <div class="message"></div>
-    </template>
-
-    <template id="albumCard">
-        <div class="album-card">
-            <div class="album-card-inner">
-                <input type="checkbox" class="album-checkbox" aria-label="Select album">
-                <img class="album-thumbnail" src="" alt="" loading="lazy">
-                <div class="album-info">
-                    <div class="tooltip-container">
-                        <div class="album-title text-truncate"></div>
-                        <span class="tooltip-text"></span>
-                    </div>
-                    <div class="tooltip-container">
-                        <div class="album-artist text-truncate"></div>
-                        <span class="tooltip-text"></span>
-                    </div>
-                    <div class="album-popularity text-sm"></div>
-                </div>
-            </div>
-            <button class="spotify-play-button" aria-label="Open in Spotify"></button>
-        </div>
-    </template>
 
     <script src="/static/js/app.js" defer></script>
 </body>
