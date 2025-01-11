@@ -23,19 +23,23 @@ document.addEventListener('DOMContentLoaded', function() {
             GPT_RESULTS: '/api/results-gpt'
         },
         UI: {
-            DEBOUNCE_DELAY: 300,
+            DEBOUNCE_DELAY: 150,
             ALBUM_BATCH_SIZE: 20,
-            SCROLL_THROTTLE: 150,
+            SCROLL_THROTTLE: 100,
+            VIRTUAL_SCROLL: {
+                BUFFER_SIZE: 10,
+                ITEM_HEIGHT: 120
+            },
             IMAGES: {
-                LAZY_LOAD_THRESHOLD: 0.1,    // Start loading when image is 10% visible
-                RETRY_ATTEMPTS: 2,           // Number of times to retry loading failed images
-                RETRY_DELAY: 2000,           // Delay between retries in ms
-                PLACEHOLDER: 'https://placehold.co/80x80?text=Album'
+                LAZY_LOAD_THRESHOLD: 0.2,
+                RETRY_ATTEMPTS: 2,
+                RETRY_DELAY: 1500,
+                PLACEHOLDER: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80"%3E%3Crect width="80" height="80" fill="%23eee"/%3E%3C/svg%3E'
             },
             FILTER: {
                 MIN_POPULARITY: 0,
                 MAX_POPULARITY: 100,
-                DEBOUNCE_DELAY: 300
+                DEBOUNCE_DELAY: 200
             },
             SORT: {
                 OPTIONS: ['name', 'artist', 'popularity'],
@@ -46,72 +50,23 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         },
         CACHE: {
-            MAX_AGE: 1000 * 60 * 30,
-            MAX_ITEMS: 50
+            MAX_AGE: 1000 * 60 * 60,
+            MAX_ITEMS: 200,
+            COMPRESSION: true
         },
         QUEUE: {
             RETRY_ATTEMPTS: 3,
             RETRY_DELAY: 1000,
-            CONCURRENT_REQUESTS: 2,
-            TIMEOUT: 30000 // 30 seconds
+            CONCURRENT_REQUESTS: 6,
+            TIMEOUT: 30000
         }
     };
 
-    // Response cache manager
-    const responseCache = {
-        cache: new Map(),
-        
-        generateKey(endpoint, params) {
-            return `${endpoint}:${JSON.stringify(params)}`;
-        },
-
-        set(endpoint, params, response) {
-            const key = this.generateKey(endpoint, params);
-            const entry = {
-                data: response,
-                timestamp: Date.now()
-            };
-
-            // Remove oldest entry if cache is full
-            if (this.cache.size >= CONFIG.CACHE.MAX_ITEMS) {
-                const oldestKey = Array.from(this.cache.entries())
-                    .sort(([, a], [, b]) => a.timestamp - b.timestamp)[0][0];
-                this.cache.delete(oldestKey);
-            }
-
-            this.cache.set(key, entry);
-            debugLogger.log(`Cache set for ${key}`, 'INFO');
-        },
-
-        get(endpoint, params) {
-            const key = this.generateKey(endpoint, params);
-            const entry = this.cache.get(key);
-
-            if (!entry) {
-                return null;
-            }
-
-            // Check if cache entry is expired
-            if (Date.now() - entry.timestamp > CONFIG.CACHE.MAX_AGE) {
-                this.cache.delete(key);
-                debugLogger.log(`Cache expired for ${key}`, 'INFO');
-                return null;
-            }
-
-            debugLogger.log(`Cache hit for ${key}`, 'INFO');
-            return entry.data;
-        },
-
-        clear() {
-            this.cache.clear();
-            debugLogger.log('Cache cleared', 'INFO');
-        }
-    };
-
-    // Request Queue Manager
+    // Enhanced request queue and caching system
     const requestQueue = {
         queue: [],
         processing: new Set(),
+        retryDelays: [1000, 2000, 4000], // Progressive retry delays
         
         async add(request) {
             const requestId = Math.random().toString(36).substring(7);
@@ -119,13 +74,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 id: requestId,
                 request,
                 retryCount: 0,
-                status: 'pending'
+                status: 'pending',
+                priority: request.priority || 0
             };
             
-            this.queue.push(queueItem);
+            // Insert based on priority
+            const insertIndex = this.queue.findIndex(item => item.priority <= queueItem.priority);
+            if (insertIndex === -1) {
+                this.queue.push(queueItem);
+            } else {
+                this.queue.splice(insertIndex, 0, queueItem);
+            }
+            
             debugLogger.log(`Request queued: ${requestId}`, 'INFO');
             
-            // Start processing if not already doing so
+            // Start processing if capacity available
             if (this.processing.size < CONFIG.QUEUE.CONCURRENT_REQUESTS) {
                 this.processQueue();
             }
@@ -153,7 +116,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 const response = await fetch(item.request.url, {
                     ...item.request.options,
-                    signal: controller.signal
+                    signal: controller.signal,
+                    headers: {
+                        ...item.request.options?.headers,
+                        'X-Request-ID': item.id
+                    }
                 });
                 
                 clearTimeout(timeout);
@@ -162,18 +129,28 @@ document.addEventListener('DOMContentLoaded', function() {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
-                const data = await response.json();
+                let data;
+                const contentType = response.headers.get('content-type');
+                if (contentType?.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    data = await response.text();
+                }
+                
                 this.processing.delete(item.id);
                 item.resolve(data);
                 
             } catch (error) {
                 if (item.retryCount < CONFIG.QUEUE.RETRY_ATTEMPTS) {
-                    // Retry the request
+                    // Progressive retry delay
+                    const retryDelay = this.retryDelays[item.retryCount] || 
+                                     this.retryDelays[this.retryDelays.length - 1];
+                    
                     item.retryCount++;
                     this.queue.unshift(item);
                     this.processing.delete(item.id);
                     debugLogger.log(`Retrying request ${item.id}, attempt ${item.retryCount}`, 'WARN');
-                    await new Promise(resolve => setTimeout(resolve, CONFIG.QUEUE.RETRY_DELAY));
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
                 } else {
                     this.processing.delete(item.id);
                     item.reject(error);
@@ -189,6 +166,96 @@ document.addEventListener('DOMContentLoaded', function() {
             this.queue = [];
             this.processing.clear();
             debugLogger.log('Request queue cleared', 'INFO');
+        }
+    };
+
+    // Enhanced response cache with compression
+    const responseCache = {
+        cache: new Map(),
+        
+        generateKey(endpoint, params) {
+            return `${endpoint}:${JSON.stringify(params)}`;
+        },
+        
+        async compress(data) {
+            if (!CONFIG.CACHE.COMPRESSION || typeof data !== 'string') {
+                return data;
+            }
+            
+            try {
+                const blob = new Blob([data]);
+                return await new Response(blob.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+            } catch (error) {
+                console.warn('Compression failed, storing uncompressed data:', error);
+                return data;
+            }
+        },
+        
+        async decompress(data) {
+            if (!CONFIG.CACHE.COMPRESSION || !(data instanceof Blob)) {
+                return data;
+            }
+            
+            try {
+                return await new Response(data.stream().pipeThrough(new DecompressionStream('gzip'))).text();
+            } catch (error) {
+                console.warn('Decompression failed:', error);
+                return data;
+            }
+        },
+        
+        async set(endpoint, params, response) {
+            const key = this.generateKey(endpoint, params);
+            const compressedData = await this.compress(response);
+            
+            const entry = {
+                data: compressedData,
+                timestamp: Date.now(),
+                accessCount: 0
+            };
+            
+            // Remove oldest or least accessed entries if cache is full
+            if (this.cache.size >= CONFIG.CACHE.MAX_ITEMS) {
+                const entries = Array.from(this.cache.entries());
+                entries.sort((a, b) => {
+                    // Prioritize keeping frequently accessed items
+                    const accessDiff = b[1].accessCount - a[1].accessCount;
+                    if (accessDiff !== 0) return accessDiff;
+                    // If access counts are equal, remove older items
+                    return b[1].timestamp - a[1].timestamp;
+                });
+                
+                const entriesToRemove = entries.slice(Math.floor(CONFIG.CACHE.MAX_ITEMS * 0.2));
+                entriesToRemove.forEach(([key]) => this.cache.delete(key));
+            }
+            
+            this.cache.set(key, entry);
+            debugLogger.log(`Cache set for ${key}`, 'INFO');
+        },
+        
+        async get(endpoint, params) {
+            const key = this.generateKey(endpoint, params);
+            const entry = this.cache.get(key);
+            
+            if (!entry) {
+                return null;
+            }
+            
+            // Check if cache entry is expired
+            if (Date.now() - entry.timestamp > CONFIG.CACHE.MAX_AGE) {
+                this.cache.delete(key);
+                debugLogger.log(`Cache expired for ${key}`, 'INFO');
+                return null;
+            }
+            
+            entry.accessCount++;
+            debugLogger.log(`Cache hit for ${key}`, 'INFO');
+            return await this.decompress(entry.data);
+        },
+        
+        clear() {
+            this.cache.clear();
+            debugLogger.log('Cache cleared', 'INFO');
         }
     };
 
@@ -686,7 +753,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (elements.toggleSelectAll) {
                     elements.toggleSelectAll.style.display = 'none';
                 }
-                // Hide filter controls when no albums
                 const filterContainer = document.querySelector('.filter-container');
                 if (filterContainer) {
                     filterContainer.style.display = 'none';
@@ -700,28 +766,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            // Set container height for virtual scrolling
+            albumsList.style.height = `${albums.length * CONFIG.UI.VIRTUAL_SCROLL.ITEM_HEIGHT}px`;
+            albumsList.style.position = 'relative';
+            
             const fragment = document.createDocumentFragment();
             albumsList.innerHTML = '';
 
-            // Show filter controls and select all button when there are albums
+            // Show controls
             if (elements.toggleSelectAll) {
                 elements.toggleSelectAll.style.display = 'flex';
+                elements.toggleSelectAll.classList.add('visible');
             }
             const filterContainer = document.querySelector('.filter-container');
             if (filterContainer) {
                 filterContainer.style.display = 'block';
             }
 
-            if (elements.toggleSelectAll) {
-                elements.toggleSelectAll.classList.add('visible');
-            }
-
             // Create operations array for batched processing
-            const operations = albums.map(album => async () => {
+            const operations = albums.map((album, index) => async () => {
                 try {
                     const card = templates.albumCard.content.cloneNode(true);
                     const cardElement = card.firstElementChild;
                     cardElement.dataset.albumId = album.id;
+                    
+                    // Position for virtual scrolling
+                    cardElement.style.position = 'absolute';
+                    cardElement.style.top = `${index * CONFIG.UI.VIRTUAL_SCROLL.ITEM_HEIGHT}px`;
+                    cardElement.style.width = '100%';
+                    cardElement.style.height = `${CONFIG.UI.VIRTUAL_SCROLL.ITEM_HEIGHT}px`;
                     
                     // Query all required elements
                     const elements = {
@@ -797,6 +870,10 @@ document.addEventListener('DOMContentLoaded', function() {
             utils.batchDOMOperations(operations, CONFIG.UI.ALBUM_BATCH_SIZE).then(() => {
                 albumsList.appendChild(fragment);
                 this.updateSelectAllButton(true);
+                
+                // Initialize virtual scrolling
+                virtualScroll.initialize(albumsList);
+                virtualScroll.updateVisibleItems();
             });
         },
 
@@ -1416,19 +1493,20 @@ document.addEventListener('DOMContentLoaded', function() {
     // Enhanced image loading utilities
     const imageLoader = {
         observer: null,
-        retryMap: new Map(),
-
+        loadingImages: new Map(),
+        imageCache: new Map(),
+        
         initialize() {
             this.observer = new IntersectionObserver(
                 (entries) => {
                     entries.forEach(entry => {
                         if (entry.isIntersecting) {
-                            const img = entry.target;
-                            const originalSrc = img.dataset.src;
-                            if (originalSrc) {
-                                this.loadImage(img, originalSrc);
-                                this.observer.unobserve(img);
+                            const imgElement = entry.target;
+                            const url = imgElement.dataset.src;
+                            if (url) {
+                                this.loadImage(imgElement, url);
                             }
+                            this.observer.unobserve(imgElement);
                         }
                     });
                 },
@@ -1437,52 +1515,73 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             );
         },
-
+        
         async loadImage(imgElement, url, retryCount = 0) {
+            // Check cache first
+            if (this.imageCache.has(url)) {
+                imgElement.src = this.imageCache.get(url);
+                return;
+            }
+            
+            // Prevent duplicate loading
+            if (this.loadingImages.has(url)) {
+                return this.loadingImages.get(url).then(blob => {
+                    imgElement.src = URL.createObjectURL(blob);
+                });
+            }
+            
             try {
-                imgElement.classList.add('loading');
-                await utils.loadImage(url);
-                imgElement.src = url;
-                imgElement.classList.remove('loading');
-                imgElement.classList.add('loaded');
-                this.retryMap.delete(imgElement);
-            } catch (error) {
-                console.error(`Failed to load image: ${url}`, error);
+                const loadPromise = fetch(url)
+                    .then(response => response.blob())
+                    .then(blob => {
+                        const objectUrl = URL.createObjectURL(blob);
+                        this.imageCache.set(url, objectUrl);
+                        imgElement.src = objectUrl;
+                        this.loadingImages.delete(url);
+                        return blob;
+                    });
+                    
+                this.loadingImages.set(url, loadPromise);
+                await loadPromise;
                 
+            } catch (error) {
+                console.error(`Error loading image: ${url}`, error);
                 if (retryCount < CONFIG.UI.IMAGES.RETRY_ATTEMPTS) {
-                    // Schedule retry
                     setTimeout(() => {
                         this.loadImage(imgElement, url, retryCount + 1);
                     }, CONFIG.UI.IMAGES.RETRY_DELAY);
                 } else {
-                    // Use placeholder after all retries fail
                     imgElement.src = CONFIG.UI.IMAGES.PLACEHOLDER;
-                    imgElement.classList.remove('loading');
-                    imgElement.classList.add('error');
                 }
             }
         },
-
+        
         observe(imgElement, url) {
-            imgElement.dataset.src = url;
             imgElement.src = CONFIG.UI.IMAGES.PLACEHOLDER;
+            imgElement.dataset.src = url;
             this.observer.observe(imgElement);
         },
-
+        
         cleanup() {
             if (this.observer) {
                 this.observer.disconnect();
             }
-            this.retryMap.clear();
+            // Clean up object URLs
+            this.imageCache.forEach(objectUrl => {
+                URL.revokeObjectURL(objectUrl);
+            });
+            this.imageCache.clear();
+            this.loadingImages.clear();
         }
     };
 
     // Initialize image loader
     imageLoader.initialize();
 
-    // Register cleanup for image loader
-    registerCleanup(window, () => {
+    // Add cleanup on page unload
+    window.addEventListener('unload', () => {
         imageLoader.cleanup();
+        virtualScroll.cleanup();
     });
 
     // Update the utils.loadImage function to use the new image loader
@@ -1617,6 +1716,78 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     }
+
+    // Virtual scroll manager
+    const virtualScroll = {
+        visibleItems: new Set(),
+        observer: null,
+        containerHeight: 0,
+        
+        initialize(container) {
+            this.container = container;
+            this.setupIntersectionObserver();
+            this.setupResizeObserver();
+            
+            // Throttled scroll handler
+            container.addEventListener('scroll', utils.throttle(() => {
+                this.updateVisibleItems();
+            }, CONFIG.UI.SCROLL_THROTTLE));
+        },
+        
+        setupIntersectionObserver() {
+            this.observer = new IntersectionObserver(
+                (entries) => {
+                    entries.forEach(entry => {
+                        const albumId = entry.target.dataset.albumId;
+                        if (entry.isIntersecting) {
+                            this.visibleItems.add(albumId);
+                        } else {
+                            this.visibleItems.delete(albumId);
+                        }
+                    });
+                },
+                {
+                    root: this.container,
+                    rootMargin: `${CONFIG.UI.VIRTUAL_SCROLL.BUFFER_SIZE * CONFIG.UI.VIRTUAL_SCROLL.ITEM_HEIGHT}px 0px`
+                }
+            );
+        },
+        
+        setupResizeObserver() {
+            const resizeObserver = new ResizeObserver(utils.throttle(() => {
+                this.containerHeight = this.container.clientHeight;
+                this.updateVisibleItems();
+            }, 100));
+            resizeObserver.observe(this.container);
+        },
+        
+        updateVisibleItems() {
+            const scrollTop = this.container.scrollTop;
+            const viewportHeight = this.containerHeight;
+            const bufferSize = CONFIG.UI.VIRTUAL_SCROLL.BUFFER_SIZE;
+            const itemHeight = CONFIG.UI.VIRTUAL_SCROLL.ITEM_HEIGHT;
+            
+            const startIndex = Math.max(0, Math.floor(scrollTop / itemHeight) - bufferSize);
+            const endIndex = Math.ceil((scrollTop + viewportHeight) / itemHeight) + bufferSize;
+            
+            Array.from(this.container.children).forEach((child, index) => {
+                if (index >= startIndex && index <= endIndex) {
+                    child.style.display = '';
+                    this.observer.observe(child);
+                } else {
+                    child.style.display = 'none';
+                    this.observer.unobserve(child);
+                }
+            });
+        },
+        
+        cleanup() {
+            if (this.observer) {
+                this.observer.disconnect();
+            }
+            this.visibleItems.clear();
+        }
+    };
 
     // Initialize application
     initializeEventListeners();
