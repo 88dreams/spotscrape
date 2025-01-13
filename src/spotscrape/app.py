@@ -104,20 +104,39 @@ logging.getLogger().handlers = []
 if getattr(sys, 'frozen', False):
     # Running as compiled executable
     base_dir = os.path.dirname(sys.executable)
-    template_dir = os.path.join(base_dir, 'spotscrape', 'frontend', 'templates')
-    static_dir = os.path.join(base_dir, 'spotscrape', 'frontend', 'static')
+    template_dir = os.path.join(base_dir, '_internal', 'frontend', 'templates')
+    static_dir = os.path.join(base_dir, '_internal', 'frontend', 'static')
 else:
     # Running as script
     base_dir = os.path.dirname(os.path.abspath(__file__))
     template_dir = os.path.join(base_dir, 'frontend', 'templates')
     static_dir = os.path.join(base_dir, 'frontend', 'static')
 
+# Add detailed debug logging for template and static directories
+debug_logger.info(f"Base directory: {base_dir}")
 debug_logger.info(f"Template directory: {template_dir}")
 debug_logger.info(f"Static directory: {static_dir}")
+
+# Verify directories exist and list contents
+if not os.path.exists(template_dir):
+    debug_logger.error(f"Template directory does not exist: {template_dir}")
+    debug_logger.info("Available directories in base_dir:")
+    try:
+        debug_logger.info(str(os.listdir(base_dir)))
+        if os.path.exists(os.path.join(base_dir, '_internal')):
+            debug_logger.info(f"Contents of _internal dir: {os.listdir(os.path.join(base_dir, '_internal'))}")
+            if os.path.exists(os.path.join(base_dir, '_internal', 'frontend')):
+                debug_logger.info(f"Contents of frontend dir: {os.listdir(os.path.join(base_dir, '_internal', 'frontend'))}")
+    except Exception as e:
+        debug_logger.error(f"Error listing directories: {e}")
+
+if not os.path.exists(static_dir):
+    debug_logger.error(f"Static directory does not exist: {static_dir}")
 
 # Create the Flask app with basic configuration
 app = Flask(__name__)
 app.static_folder = static_dir
+app.template_folder = template_dir
 app.jinja_loader = FileSystemLoader(template_dir)
 CORS(app)
 
@@ -167,8 +186,26 @@ def async_route(f):
 
 @app.route('/')
 def index():
-    debug_logger.debug("Serving index page")
-    return render_template('index.html')
+    """Serve the index page with enhanced error handling"""
+    debug_logger.debug("Attempting to serve index page")
+    try:
+        debug_logger.debug(f"Current template folder: {app.template_folder}")
+        debug_logger.debug(f"Available templates: {app.jinja_loader.list_templates()}")
+        return render_template('index.html')
+    except Exception as e:
+        error_msg = f"Error serving index page: {str(e)}"
+        debug_logger.error(error_msg, exc_info=True)
+        return f"""
+        <html>
+            <body>
+                <h1>Error Loading Application</h1>
+                <p>There was an error loading the application templates.</p>
+                <p>Error: {error_msg}</p>
+                <p>Template Directory: {template_dir}</p>
+                <p>Static Directory: {static_dir}</p>
+            </body>
+        </html>
+        """, 500
 
 @app.route('/api/results-gpt')
 def get_gpt_results():
@@ -248,27 +285,48 @@ async def scan_url():
                 gui_message(f"Processing album {i}/{total}...")
                 send_progress(int(progress), f"Processing album {i}/{total}...")
                 
-                album_info = await spotify_manager.get_album_info(album_id)
-                
-                if album_info:
-                    formatted_album = {
-                        'id': album_info.get('id'),
-                        'artist': album_info.get('artists', [{}])[0].get('name'),
-                        'name': album_info.get('name'),
-                        'popularity': album_info.get('popularity', 0),
-                        'images': album_info.get('images', []),
-                        'spotify_url': f"https://open.spotify.com/album/{album_id}",
-                        'source_url': url,
-                        'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    }
-                    albums.append(formatted_album)
-                    debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']}")
-                    gui_message(f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
-                    send_progress(int(progress), f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
-                else:
-                    debug_logger.warning(f"Could not get info for album ID: {album_id}")
-                    gui_message(f"✗ Could not get info for album", True)
-                    send_progress(int(progress), f"✗ Could not get album info")
+                try:
+                    album_info = await spotify_manager.get_album_info(album_id)
+                    
+                    if album_info:
+                        # Get tracks and sort by popularity
+                        tracks = album_info.get('tracks', {}).get('items', [])
+                        most_popular_track = None
+                        
+                        # Only attempt to get track info if tracks exist
+                        if tracks and hasattr(spotify_manager, 'get_tracks_info'):
+                            try:
+                                tracks_with_info = await spotify_manager.get_tracks_info([track['id'] for track in tracks])
+                                if tracks_with_info:
+                                    most_popular_track = max(tracks_with_info, key=lambda x: x.get('popularity', 0))
+                            except Exception as track_error:
+                                debug_logger.error(f"Error getting track info: {track_error}")
+                                # Continue without track info if it fails
+                                pass
+
+                        formatted_album = {
+                            'id': album_info.get('id'),
+                            'artist': album_info.get('artists', [{}])[0].get('name'),
+                            'name': album_info.get('name'),
+                            'popularity': album_info.get('popularity', 0),
+                            'images': album_info.get('images', []),
+                            'spotify_url': f"https://open.spotify.com/album/{album_id}",
+                            'most_popular_track_id': most_popular_track.get('id') if most_popular_track else None,
+                            'source_url': url,
+                            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                        albums.append(formatted_album)
+                        debug_logger.info(f"Added album: {formatted_album['artist']} - {formatted_album['name']}")
+                        gui_message(f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
+                        send_progress(int(progress), f"✓ Found: {formatted_album['artist']} - {formatted_album['name']}")
+                    else:
+                        debug_logger.warning(f"Could not get info for album ID: {album_id}")
+                        gui_message(f"✗ Could not get info for album", True)
+                        send_progress(int(progress), f"✗ Could not get album info")
+                except Exception as album_error:
+                    debug_logger.error(f"Error processing album {album_id}: {str(album_error)}")
+                    gui_message(f"✗ Error processing album: {str(album_error)}", True)
+                    continue
             
             debug_logger.info(f"Successfully retrieved info for {len(albums)} albums")
             send_progress(95, "Saving results...")
@@ -823,11 +881,23 @@ def shutdown_server():
     """Shutdown the Flask server"""
     debug_logger.info("Shutting down Flask server...")
     try:
+        # Make a request to the shutdown endpoint
+        import requests
+        requests.get('http://localhost:5000/shutdown', timeout=0.5)
+    except Exception as e:
+        debug_logger.error(f"Error shutting down Flask server: {e}")
+
+@app.route('/shutdown')
+def shutdown():
+    """Endpoint to shut down the Flask server"""
+    try:
         func = request.environ.get('werkzeug.server.shutdown')
         if func is not None:
             func()
+            return 'Server shutting down...'
     except Exception as e:
-        debug_logger.error(f"Error shutting down Flask server: {e}")
+        debug_logger.error(f"Error in shutdown endpoint: {e}")
+        return 'Error shutting down server'
 
 def start_server():
     """Start the Flask server"""

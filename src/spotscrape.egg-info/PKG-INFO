@@ -33,139 +33,153 @@ Requires-Dist: uvloop>=0.19.0; extra == "unix"
 
 # SpotScrape
 
-A Python tool for scraping music information from web pages and creating Spotify playlists.
+SpotScrape is a modern desktop application that helps you discover and create Spotify playlists from web content. It uses both direct URL scanning and AI-powered content analysis to find and organize music.
 
 ## Features
 
-- Scan webpages for Spotify album links
-- Extract artist and album information from music-related content
-- Create Spotify playlists from extracted data
-- Efficient caching and rate limiting
-- Asynchronous operations for better performance
-- Modern web interface for easy interaction
+- 🎵 Scan web pages for Spotify album links
+- 🤖 AI-powered music content extraction
+- 📝 Create Spotify playlists automatically
+- 🎨 Modern, user-friendly interface
+- 🔄 Support for various music review sites and blogs
 
 ## Prerequisites
 
 - Python 3.8 or higher
 - Spotify Developer Account
-- OpenAI API Key
+- OpenAI API Key (for AI-powered scanning)
+- Git (for cloning the repository)
 
-## Installation Options
+## Setup Instructions
 
-### Option 1: Install from PyPI (Recommended)
-```bash
-pip install spotscrape
-```
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/88dreams/spotscrape.git
+   cd spotscrape
+   ```
 
-### Option 2: Install from Source
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/spotscrape.git
-cd spotscrape
-```
+2. **Create and Activate Virtual Environment**
+   ```bash
+   # Windows
+   python -m venv venv
+   .\venv\Scripts\activate
 
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
+   # macOS/Linux
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
-# On Windows:
-.\venv\Scripts\activate
+3. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# On macOS/Linux:
-source venv/bin/activate
-```
+4. **Configure API Keys**
+   - Copy the example configuration file:
+     ```bash
+     cp config.json.example config.json
+     ```
+   - Edit `config.json` and add your API keys:
+     - Spotify API credentials (from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard))
+     - OpenAI API key (from [OpenAI Platform](https://platform.openai.com/api-keys))
 
-3. Install in development mode:
-```bash
-pip install -e .
-```
+5. **Spotify Developer Setup**
+   1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   2. Create a new application
+   3. Add `http://localhost:8888/callback` to the Redirect URIs
+   4. Copy the Client ID and Client Secret to your `config.json`
 
-### Option 3: Standalone Installation
-1. Download the latest release from the releases page
-2. Extract the archive
-3. Run the installer:
-```bash
-# Windows
-spotscrape-1.0.0-win.exe
+## Running the Application
 
-# macOS
-open spotscrape-1.0.0-mac.dmg
+1. **Start the Application**
+   ```bash
+   # From the project root directory
+   python -m spotscrape
+   ```
 
-# Linux
-chmod +x spotscrape-1.0.0-linux.AppImage
-./spotscrape-1.0.0-linux.AppImage
-```
+2. **First-Time Setup**
+   - On first run, you'll need to authorize the application with Spotify
+   - A browser window will open for authentication
+   - After authorizing, you can close the browser window
 
-## Configuration
+## Usage Guide
 
-1. Create a `.env` file in the project root (or user's home directory):
-```env
-SPOTIPY_CLIENT_ID=your_spotify_client_id
-SPOTIPY_CLIENT_SECRET=your_spotify_client_secret
-SPOTIPY_REDIRECT_URI=your_spotify_redirect_uri
-OPENAI_API_KEY=your_openai_api_key
-```
+### URL Scanning
+1. Enter a URL containing Spotify album links
+2. Click "Scan URL"
+3. Review the found albums
+4. Select albums to include in playlist
+5. Click "Create Playlist"
 
-2. Replace the placeholder values with your actual API credentials:
-   - Get Spotify credentials from [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-   - Get OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+### AI-Powered Scanning
+1. Enter a URL containing music content
+2. Select "GPT Scan" option
+3. Wait for the AI to analyze the content
+4. Review the found albums
+5. Create your playlist
 
-## Usage
-
-### Command Line Interface
-```bash
-spotscrape
-```
-
-### GUI Application
-```bash
-spotscrape-gui
-```
-
-The application will open in your default web browser, providing a user-friendly interface for:
-- Scanning webpages for music content
-- Managing Spotify playlists
-- Configuring application settings
-
-## Development
-
-- Main branch: Production-ready code
-- Development branch: Work in progress features
-
-### Setting up Development Environment
-```bash
-git clone https://github.com/yourusername/spotscrape.git
-cd spotscrape
-python -m venv venv
-source venv/bin/activate  # or .\venv\Scripts\activate on Windows
-pip install -e ".[dev]"
-```
+### Playlist Creation Options
+- Include all tracks from albums
+- Include only the most popular track
+- Include only the first track
+- Customize playlist name and description
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Browser doesn't open automatically**
-   - Try running `spotscrape --no-browser` and manually open http://localhost:5000
+1. **Application Won't Start**
+   - Check if all dependencies are installed
+   - Verify `config.json` exists and is properly formatted
+   - Ensure Python version is 3.8 or higher
 
 2. **Authentication Errors**
-   - Verify your Spotify and OpenAI credentials in the .env file
-   - Check if the redirect URI matches your Spotify app settings
+   - Verify Spotify API credentials
+   - Check redirect URI in Spotify Developer Dashboard
+   - Delete `.cache` file and try again
 
-3. **Installation Issues**
-   - Make sure you have Python 3.8 or higher installed
-   - On Windows, you might need to run PowerShell as administrator
-   - On Linux/macOS, you might need to use `sudo pip install spotscrape`
+3. **Scanning Issues**
+   - Check internet connection
+   - Verify URL is accessible
+   - Ensure OpenAI API key is valid (for GPT scanning)
+
+### Error Logs
+- Check logs in `src/spotscrape/logs/` directory
+- Debug logs are named `spot-debug-YYYYMMDD.log`
+- Spotify-specific logs are in `spot-spotify-YYYYMMDD.log`
+
+## Development Setup
+
+For developers who want to contribute:
+
+1. **Fork and Clone**
+   ```bash
+   git clone https://github.com/yourusername/spotscrape.git
+   cd spotscrape
+   ```
+
+2. **Create Development Branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+3. **Install Development Dependencies**
+   ```bash
+   pip install -r requirements-dev.txt
+   ```
+
+4. **Run Tests**
+   ```bash
+   pytest
+   ```
 
 ## License
 
-MIT License
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Contributing
+## Acknowledgments
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+- Built with [Spotipy](https://spotipy.readthedocs.io/)
+- UI powered by [Flask](https://flask.palletsprojects.com/) and [pywebview](https://pywebview.flowrl.com/)
+- AI features powered by [OpenAI](https://openai.com/)
    

@@ -1,34 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+
 a = Analysis(
-    ['src/spotscrape/app.py'],
-    pathex=['src'],
+    ['C:\\users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\app.py'],
+    pathex=[],
     binaries=[],
-    datas=[
-        ('src/spotscrape/frontend/templates/*', 'spotscrape/frontend/templates'),
-        ('src/spotscrape/frontend/static/*', 'spotscrape/frontend/static'),
-        ('src/spotscrape/config', 'spotscrape/config'),
-        ('src/spotscrape/logs', 'spotscrape/logs'),
-        ('src/spotscrape/data', 'spotscrape/data'),
-        ('build/playwright', 'playwright')
-    ],
-    hiddenimports=[
-        'spotscrape',
-        'spotscrape.core',
-        'spotscrape.app',
-        'spotscrape.utils',
-        'spotscrape.web_extractor',
-        'spotscrape.spotify_manager',
-        'spotscrape.content_processor',
-        'webview'
-    ],
-    hookspath=['.'],
+    datas=[('src\\spotscrape\\frontend\\templates', 'frontend/templates'), ('src\\spotscrape\\frontend\\static', 'frontend/static'), ('config.json.example', '.'), ('.env.example', '.')],
+    hiddenimports=['flask', 'flask_cors', 'webview', 'playwright', 'spotipy', 'openai', 'asyncio', 'aiohttp', 'requests', 'json', 'logging', 'bs4', 'lxml', 'jinja2', 'jinja2.ext', 'werkzeug', 'werkzeug.serving', 'werkzeug.debug', 'clr_loader', 'pythonnet'],
+    hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
+    optimize=0,
 )
-
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -47,15 +32,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['C:\\users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\frontend\\static\\img\\icon.ico'],
 )
-
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='spotscrape'
+    name='spotscrape',
 )

@@ -851,7 +851,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else if (e.target === elements.playButton || (!isCheckbox && !e.target.closest('label'))) {
                             e.stopPropagation();
                             if (album.spotify_url) {
-                                window.open(album.spotify_url, '_blank');
+                                // Open album and play the most popular track if available
+                                const baseUrl = album.spotify_url;
+                                const trackId = album.most_popular_track_id;
+                                if (trackId) {
+                                    window.open(`${baseUrl}?highlight=${trackId}`, '_blank');
+                                } else {
+                                    window.open(baseUrl, '_blank');
+                                }
                             } else {
                                 this.addMessage('Spotify URL not available for this album', true);
                             }

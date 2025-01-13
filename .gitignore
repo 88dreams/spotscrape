@@ -27,12 +27,14 @@ wheels/
 env/
 venv/
 ENV/
+virtual/
 
 # Logs and data
 logs/
 *.log
 src/SpotScrape_data/
 *.json
+!config.json.example
 
 # IDE specific files
 .idea/
@@ -69,4 +71,8 @@ wheels/
 .cache
 .cache-*
 spotify_credentials.json
-openai_credentials.json 
+openai_credentials.json
+
+# Browser downloads
+playwright-browsers/
+playwright/ 
