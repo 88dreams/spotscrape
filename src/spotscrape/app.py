@@ -885,7 +885,7 @@ def main():
         
         # Create and start webview window with close handler
         window = webview.create_window('SpotScrape', 'http://localhost:5000',
-                                     width=1200, height=920,
+                                     width=1200, height=850,
                                      min_size=(1000, 750))
         
         # Add close handler
