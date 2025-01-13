@@ -96,10 +96,21 @@ class SpotifySearchManager:
         except Exception as e:
             self.logger.error(f"Error getting album info for ID {album_id}: {e}")
             return None
+    
+    async def cleanup(self):
+        """Clean up Spotify resources"""
+        if self._spotify_instance:
+            try:
+                self._spotify_instance.close()
+                self._spotify_instance = None
+            except Exception as e:
+                self.logger.error(f"Error closing Spotify instance: {e}")
 
 class PlaylistManager:
     def __init__(self):
         self.logger = logging.getLogger('spot-debug')
+        self._spotify_instance = None
+        self._lock = asyncio.Lock()
     
     async def create_playlist(self, name: str, description: str = "") -> Optional[str]:
         """Create a Spotify playlist with the given name and description.
@@ -167,3 +178,12 @@ class PlaylistManager:
         except Exception as e:
             self.logger.error(f"Error adding tracks to playlist: {e}")
             return False 
+    
+    async def cleanup(self):
+        """Clean up Spotify resources"""
+        if self._spotify_instance:
+            try:
+                self._spotify_instance.close()
+                self._spotify_instance = None
+            except Exception as e:
+                self.logger.error(f"Error closing Spotify instance: {e}") 
