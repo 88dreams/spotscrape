@@ -6,10 +6,6 @@ README.md
 config.json.example
 pyproject.toml
 requirements.txt
-frontend/static/css/styles.css
-frontend/static/css/tailwind.min.css
-frontend/static/js/app.js
-frontend/templates/index.html
 src/spotscrape/__init__.py
 src/spotscrape/app.py
 src/spotscrape/config_manager.py
@@ -33,8 +29,3 @@ src/spotscrape/frontend/static/img/icon.png
 src/spotscrape/frontend/static/js/app.js
 src/spotscrape/frontend/templates/index.html
 tests/test_core.py
-web/.cache
-web/SpotScrape_data/musicdata_url_20250103_175836.json
-web/SpotScrape_data/musicdata_url_20250103_180052.json
-web/SpotScrape_data/musicdata_url_20250103_180251.json
-web/SpotScrape_data/musicdata_url_20250103_180315.json

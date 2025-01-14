@@ -173,6 +173,7 @@ def verify_build():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     dist_dir = os.path.join(base_dir, 'dist', 'spotscrape')
     internal_dir = os.path.join(dist_dir, '_internal')
+    frontend_dir = os.path.join(internal_dir, 'frontend')
     
     # Check executable
     exe_name = 'spotscrape.exe' if sys.platform == 'win32' else 'spotscrape'
@@ -184,11 +185,11 @@ def verify_build():
     
     # Required directories
     required_dirs = [
-        os.path.join(internal_dir, 'frontend'),
-        os.path.join(internal_dir, 'frontend', 'templates'),
-        os.path.join(internal_dir, 'frontend', 'static'),
-        os.path.join(internal_dir, 'frontend', 'static', 'css'),
-        os.path.join(internal_dir, 'frontend', 'static', 'js')
+        frontend_dir,
+        os.path.join(frontend_dir, 'templates'),
+        os.path.join(frontend_dir, 'static'),
+        os.path.join(frontend_dir, 'static', 'css'),
+        os.path.join(frontend_dir, 'static', 'js')
     ]
     
     # Check directories
@@ -208,9 +209,9 @@ def verify_build():
     
     # Required files
     required_files = [
-        os.path.join(internal_dir, 'frontend', 'templates', 'index.html'),
-        os.path.join(internal_dir, 'frontend', 'static', 'css', 'styles.css'),
-        os.path.join(internal_dir, 'frontend', 'static', 'js', 'app.js'),
+        os.path.join(frontend_dir, 'templates', 'index.html'),
+        os.path.join(frontend_dir, 'static', 'css', 'styles.css'),
+        os.path.join(frontend_dir, 'static', 'js', 'app.js'),
         os.path.join(internal_dir, 'config.json.example'),
         os.path.join(internal_dir, '.env.example')
     ]
@@ -261,6 +262,17 @@ def build_standalone(dev_mode=False):
         # Check dependencies first
         check_dependencies()
         
+        # Install Playwright browser if not already installed
+        log_and_print("\nChecking Playwright browser installation...")
+        import subprocess
+        try:
+            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], 
+                         check=True, capture_output=True)
+            log_and_print("Chromium installation completed")
+        except subprocess.CalledProcessError as e:
+            log_and_print(f"Failed to install Chromium: {e.output.decode() if e.output else str(e)}", logging.ERROR)
+            raise
+        
         # Log versions of key dependencies using importlib.metadata
         log_and_print("\nDependency Versions:")
         log_and_print(f"Python: {sys.version.split()[0]}")
@@ -278,36 +290,40 @@ def build_standalone(dev_mode=False):
         src_path = os.path.join(base_path, 'src', 'spotscrape')
         frontend_path = os.path.join(src_path, 'frontend')
         
-        # Verify frontend directories exist
-        template_path = os.path.join(frontend_path, 'templates')
-        static_path = os.path.join(frontend_path, 'static')
+        # Find Playwright browser path
+        import site
+        site_packages = site.getsitepackages()[0]
+        playwright_path = os.path.join(site_packages, 'playwright')
+        browser_path = None
         
-        if not os.path.exists(template_path) or not os.path.exists(static_path):
-            error_msg = (
-                f"Frontend directories not found:\n"
-                f"Template dir ({template_path}): {os.path.exists(template_path)}\n"
-                f"Static dir ({static_path}): {os.path.exists(static_path)}"
-            )
-            log_and_print(error_msg, logging.ERROR)
-            raise FileNotFoundError(error_msg)
-
-        # Log configuration
-        log_and_print(f"\nBuild Configuration:")
-        log_and_print(f"Platform: {sys.platform}")
-        log_and_print(f"Mode: {'Development' if dev_mode else 'Production'}")
-        log_and_print(f"Base path: {base_path}")
-        log_and_print(f"Frontend path: {frontend_path}")
-
+        # Look for the browser in common locations
+        possible_paths = [
+            os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright'),
+            os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright'),
+            os.path.join(os.getcwd(), 'playwright-browsers'),
+            os.path.join(os.path.dirname(sys.executable), 'playwright-browsers')
+        ]
+        
+        for base_dir in possible_paths:
+            if os.path.exists(base_dir):
+                for item in os.listdir(base_dir):
+                    if item.startswith('chromium-'):
+                        chrome_path = os.path.join(base_dir, item)
+                        if os.path.exists(chrome_path):
+                            browser_path = chrome_path
+                            log_and_print(f"Found browser at: {browser_path}")
+                            break
+                if browser_path:
+                    break
+        
+        if not browser_path:
+            raise FileNotFoundError("Could not find Playwright browser installation")
+        
         # Platform-specific settings
         if sys.platform.startswith('win'):
-            icon = os.path.join(static_path, 'img', 'icon.ico')
-            separator = ';'
-        elif sys.platform.startswith('darwin'):
-            icon = os.path.join(static_path, 'img', 'icon.icns')
-            separator = ':'
-        else:  # Linux
-            icon = os.path.join(static_path, 'img', 'icon.png')
-            separator = ':'
+            icon = os.path.join(frontend_path, 'static', 'img', 'icon.ico')
+        else:
+            icon = None
 
         # Base PyInstaller arguments
         args = [
@@ -315,7 +331,7 @@ def build_standalone(dev_mode=False):
             '--name=spotscrape',
             '--onedir',
             '--clean',
-            '--noconfirm',
+            '--noconfirm'
         ]
 
         # Add windowed mode in production
@@ -323,16 +339,16 @@ def build_standalone(dev_mode=False):
             args.append('--windowed')
 
         # Add icon if it exists
-        if os.path.exists(icon):
+        if icon and os.path.exists(icon):
             args.append(f'--icon={icon}')
             log_and_print(f"Using icon: {icon}")
 
-        # Add data files - using relative paths and specifying _internal destination
+        # Add data files with consistent forward slashes
         data_args = [
-            f'--add-data=src{os.sep}spotscrape{os.sep}frontend{os.sep}templates{separator}frontend/templates',
-            f'--add-data=src{os.sep}spotscrape{os.sep}frontend{os.sep}static{separator}frontend/static',
-            f'--add-data=config.json.example{separator}.',
-            f'--add-data=.env.example{separator}.'
+            f'--add-data={os.path.join(src_path, "frontend").replace(os.sep, "/")};frontend',
+            f'--add-data={os.path.join(src_path, "config.json.example").replace(os.sep, "/")};.',
+            f'--add-data={os.path.join(src_path, ".env.example").replace(os.sep, "/")};.',
+            f'--add-data={browser_path.replace(os.sep, "/")};playwright'  # Add Playwright browser
         ]
         args.extend(data_args)
 
@@ -366,11 +382,17 @@ def build_standalone(dev_mode=False):
             args.extend(['--hidden-import', imp])
             log_and_print(f"Adding hidden import: {imp}")
 
+        # Add debug options in dev mode
+        if dev_mode:
+            args.extend(['--debug=all', '--log-level=DEBUG'])
+        else:
+            args.append('--log-level=INFO')
+
         # Print final PyInstaller command
         log_and_print("\nPyInstaller command:")
         log_and_print(" ".join(args))
         log_and_print("\nBuilding application...")
-
+        
         # Run PyInstaller
         PyInstaller.__main__.run(args)
 

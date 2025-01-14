@@ -44,14 +44,17 @@ def setup_debug_logging():
     debug_logger.setLevel(logging.DEBUG)
     debug_logger.propagate = False  # Prevent propagation to root logger
     
-    # Get the executable's directory or current directory
+    # Get the appropriate log directory
     if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
+        # When running as executable, use user's documents folder
+        base_dir = os.path.expanduser('~')
+        log_dir = os.path.join(base_dir, "SpotScrape", "logs")
     else:
+        # When running as script, use the source directory
         base_dir = os.path.dirname(os.path.abspath(__file__))
+        log_dir = os.path.join(base_dir, "logs")
     
     # Create logs directory if it doesn't exist
-    log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     
     # Create or overwrite the debug log file
@@ -523,10 +526,9 @@ def scan_gpt():
 async def create_playlist():
     """Handle playlist creation with better error handling and progress updates"""
     spotify_manager = None
-    playlist_manager = None
     try:
         data = request.json
-        album_ids = data.get('albums', [])
+        album_ids = data.get('albums', [])  # This is now a list of album IDs
         playlist_name = data.get('playlistName', '')
         playlist_description = data.get('playlistDescription', '')
         include_all_tracks = data.get('includeAllTracks', True)
@@ -542,27 +544,22 @@ async def create_playlist():
         if not playlist_description:
             playlist_description = "Created with SpotScrape"
 
-        # Initialize managers with timeout
+        # Initialize managers
         playlist_manager = PlaylistManager()
         spotify_manager = SpotifySearchManager()
         
         gui_message("Creating new playlist...")
         
-        # Create the playlist with timeout
-        try:
-            async with asyncio.timeout(30):  # 30 second timeout for playlist creation
-                playlist_id = await playlist_manager.create_playlist(
-                    name=playlist_name,
-                    description=playlist_description
-                )
-        except asyncio.TimeoutError:
-            logger.error("Playlist creation timed out")
-            return jsonify({'error': 'Playlist creation timed out'}), 504
+        # Create the playlist
+        playlist_id = await playlist_manager.create_playlist(
+            name=playlist_name,
+            description=playlist_description
+        )
         
         if not playlist_id:
             logger.error("Failed to create playlist")
             return jsonify({'error': 'Failed to create playlist - authorization may be required'}), 500
-
+        
         gui_message(f"Created playlist: {playlist_name}")
         gui_message("Gathering tracks from albums...")
         
@@ -576,55 +573,46 @@ async def create_playlist():
                 continue
                 
             try:
-                async with asyncio.timeout(10):  # 10 second timeout per album
-                    album_info = await spotify_manager.get_album_info(album_id)
-                    if not album_info:
-                        logger.warning(f"Could not fetch info for album ID: {album_id}")
-                        continue
+                album_info = await spotify_manager.get_album_info(album_id)
+                if not album_info:
+                    logger.warning(f"Could not fetch info for album ID: {album_id}")
+                    continue
+                
+                artist_name = album_info.get('artists', [{}])[0].get('name', 'Unknown')
+                album_name = album_info.get('name', 'Unknown')
+                gui_message(f"Processing album {i} of {total_albums}: {artist_name} - {album_name}")
                     
-                    artist_name = album_info.get('artists', [{}])[0].get('name', 'Unknown')
-                    album_name = album_info.get('name', 'Unknown')
-                    gui_message(f"Processing album {i} of {total_albums}: {artist_name} - {album_name}")
-                        
-                    album_tracks = album_info.get('tracks', {}).get('items', [])
-                    if not album_tracks:
-                        logger.warning(f"No tracks found for album ID: {album_id}")
-                        continue
+                album_tracks = album_info.get('tracks', {}).get('items', [])
+                if not album_tracks:
+                    logger.warning(f"No tracks found for album ID: {album_id}")
+                    continue
+                
+                if include_popular_tracks:
+                    # Sort tracks by popularity and take the most popular one
+                    album_tracks.sort(key=lambda x: x.get('popularity', 0), reverse=True)
+                    album_tracks = album_tracks[:1]
+                elif not include_all_tracks:
+                    # Take only the first track
+                    album_tracks = album_tracks[:1]
                     
-                    if include_popular_tracks:
-                        # Sort tracks by popularity and take the most popular one
-                        album_tracks.sort(key=lambda x: x.get('popularity', 0), reverse=True)
-                        album_tracks = album_tracks[:1]
-                    elif not include_all_tracks:
-                        # Take only the first track
-                        album_tracks = album_tracks[:1]
-                        
-                    track_ids = [track['id'] for track in album_tracks if track.get('id')]
-                    tracks_to_add.extend(track_ids)
-                    
-            except asyncio.TimeoutError:
-                logger.error(f"Timeout processing album {album_id}")
-                continue
+                track_ids = [track['id'] for track in album_tracks if track.get('id')]
+                tracks_to_add.extend(track_ids)
+                
             except Exception as e:
                 logger.error(f"Error processing album {album_id}: {str(e)}")
                 continue
-
+        
         if not tracks_to_add:
             logger.error("No tracks found to add to playlist")
             return jsonify({'error': 'No tracks found to add to playlist'}), 400
         
         gui_message(f"Adding {len(tracks_to_add)} tracks to playlist...")
         
-        # Add tracks to playlist with timeout
-        try:
-            async with asyncio.timeout(60):  # 60 second timeout for adding tracks
-                success = await playlist_manager.add_tracks_to_playlist(playlist_id, tracks_to_add)
-                if not success:
-                    logger.error("Failed to add tracks to playlist")
-                    return jsonify({'error': 'Failed to add tracks to playlist'}), 500
-        except asyncio.TimeoutError:
-            logger.error("Timeout adding tracks to playlist")
-            return jsonify({'error': 'Timeout adding tracks to playlist'}), 504
+        # Add tracks to playlist
+        success = await playlist_manager.add_tracks_to_playlist(playlist_id, tracks_to_add)
+        if not success:
+            logger.error("Failed to add tracks to playlist")
+            return jsonify({'error': 'Failed to add tracks to playlist'}), 500
             
         gui_message("Successfully created playlist!")
         
@@ -640,18 +628,12 @@ async def create_playlist():
         return jsonify({'error': error_msg}), 500
     finally:
         # Clean up Spotify resources
-        if spotify_manager:
+        if spotify_manager and spotify_manager._spotify_instance:
             try:
-                await spotify_manager.cleanup()
+                spotify_manager._spotify_instance.close()
+                spotify_manager._spotify_instance = None
             except Exception as e:
-                logger.error(f"Error cleaning up Spotify manager: {e}")
-        
-        if playlist_manager:
-            try:
-                await playlist_manager.cleanup()
-            except Exception as e:
-                logger.error(f"Error cleaning up playlist manager: {e}")
-                
+                logger.error(f"Error cleaning up Spotify resources: {e}")
         # Clear any remaining progress messages
         while not progress_queue.empty():
             try:

@@ -2,16 +2,16 @@
 
 
 a = Analysis(
-    ['C:\\users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\app.py'],
+    ['C:\\Users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\app.py'],
     pathex=[],
     binaries=[],
-    datas=[('src\\spotscrape\\frontend\\templates', 'frontend/templates'), ('src\\spotscrape\\frontend\\static', 'frontend/static'), ('config.json.example', '.'), ('.env.example', '.')],
-    hiddenimports=['flask', 'flask_cors', 'webview', 'playwright', 'spotipy', 'openai', 'asyncio', 'aiohttp', 'requests', 'json', 'logging', 'bs4', 'lxml', 'jinja2', 'jinja2.ext', 'werkzeug', 'werkzeug.serving', 'werkzeug.debug', 'clr_loader', 'pythonnet'],
+    datas=[('C:/Users/lucas/GIT/spotscrape/src/spotscrape/frontend', 'frontend'), ('C:/Users/lucas/GIT/spotscrape/src/spotscrape/config.json.example', '.'), ('C:/Users/lucas/GIT/spotscrape/src/spotscrape/.env.example', '.'), ('C:/Users/lucas/AppData/Local/ms-playwright/chromium-1148', 'playwright')],
+    hiddenimports=['flask', 'flask_cors', 'webview', 'playwright', 'spotipy', 'openai', 'asyncio', 'aiohttp', 'requests', 'json', 'logging', 'bs4', 'lxml', 'jinja2', 'jinja2.ext', 'werkzeug', 'werkzeug.serving', 'werkzeug.debug', 'clr_loader', 'pythonnet', 'tzdata', 'zoneinfo'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    noarchive=False,
+    noarchive=True,
     optimize=0,
 )
 pyz = PYZ(a.pure)
@@ -19,10 +19,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    [],
+    [('v', None, 'OPTION')],
     exclude_binaries=True,
     name='spotscrape',
-    debug=False,
+    debug=True,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
@@ -32,7 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\frontend\\static\\img\\icon.ico'],
+    icon=['C:\\Users\\lucas\\GIT\\spotscrape\\src\\spotscrape\\frontend\\static\\img\\icon.ico'],
 )
 coll = COLLECT(
     exe,

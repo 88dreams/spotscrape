@@ -1,0 +1,15 @@
+{
+    "spotify": {
+        "client_id": "YOUR_SPOTIFY_CLIENT_ID",
+        "client_secret": "YOUR_SPOTIFY_CLIENT_SECRET",
+        "redirect_uri": "http://localhost:8080/callback"
+    },
+    "openai": {
+        "api_key": "YOUR_OPENAI_API_KEY"
+    },
+    "app": {
+        "debug": false,
+        "port": 8080,
+        "host": "localhost"
+    }
+} 
