@@ -405,138 +405,130 @@ class SpotifySearchManager:
             logger.error(f"Error getting album info: {e}")
             return None
 
-class WebContentExtractor:
-    """Handles web content extraction with improved efficiency"""
+class PlaywrightCrawler:
+    """Handles web crawling with improved resource management"""
     def __init__(self):
         self._lock = AsyncLock()
         self._playwright = None
         self._browser = None
+        self._context = None
 
     async def __aenter__(self):
+        await self.setup()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.cleanup()
 
     async def setup(self):
-        """Initialize Playwright resources"""
-        if not self._playwright:
-            try:
-                self._playwright = await async_playwright().start()
-                
-                # Get browser path based on environment
-                if getattr(sys, 'frozen', False):
-                    # Running in PyInstaller bundle
-                    base_path = sys._MEIPASS
-                    executable_path = os.path.join(base_path, 'playwright', 'chrome-win', 'chrome.exe')
-                    logger.debug(f"Using bundled browser at: {executable_path}")
-                else:
-                    # Running in development environment
-                    executable_path = None
-                    if sys.platform.startswith('win'):
-                        # Try to find the browser in various locations
-                        possible_paths = [
-                            os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright'),
-                            os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright'),
-                            os.path.join(os.getcwd(), 'playwright-browsers'),
-                            os.path.join(os.path.dirname(sys.executable), 'playwright-browsers')
-                        ]
+        """Set up Playwright resources"""
+        async with self._lock:
+            if self._playwright is None:
+                try:
+                    self._playwright = await async_playwright().start()
+                    
+                    # Get the base directory and browser path
+                    if getattr(sys, 'frozen', False):
+                        base_path = os.path.dirname(sys.executable)
+                        # Look for browser in the specific bundled directory
+                        browser_dir = os.path.join(base_path, '_internal', 'playwright', 'chromium_headless_shell-1148')
+                        executable_path = os.path.join(browser_dir, 'chrome-win', 'headless_shell.exe')
                         
-                        for base_path in possible_paths:
-                            if os.path.exists(base_path):
-                                for item in os.listdir(base_path):
-                                    if item.startswith('chromium-'):
-                                        chrome_exe = os.path.join(base_path, item, 'chrome-win', 'chrome.exe')
-                                        if os.path.exists(chrome_exe):
-                                            executable_path = chrome_exe
-                                            logger.debug(f"Found browser at: {executable_path}")
-                                            break
-                                if executable_path:
-                                    break
+                        if not os.path.exists(executable_path):
+                            # Log directory contents for debugging
+                            logger.debug(f"Browser directory contents: {os.listdir(browser_dir) if os.path.exists(browser_dir) else 'directory not found'}")
+                            raise FileNotFoundError(f"Browser executable not found at: {executable_path}")
                         
-                        if not executable_path:
-                            # Try to install the browser
-                            logger.info("Browser not found. Installing Chromium...")
-                            import subprocess
-                            try:
-                                subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], 
-                                            check=True, capture_output=True)
-                                logger.info("Chromium installation completed")
-                                
-                                # Try to find the browser again
-                                for base_path in possible_paths:
-                                    if os.path.exists(base_path):
-                                        for item in os.listdir(base_path):
-                                            if item.startswith('chromium-'):
-                                                chrome_exe = os.path.join(base_path, item, 'chrome-win', 'chrome.exe')
-                                                if os.path.exists(chrome_exe):
-                                                    executable_path = chrome_exe
-                                                    logger.debug(f"Found browser after installation at: {executable_path}")
-                                                    break
-                                        if executable_path:
-                                            break
-                            except subprocess.CalledProcessError as e:
-                                logger.error(f"Failed to install Chromium: {e.output.decode() if e.output else str(e)}")
-                                raise
-                
-                if sys.platform.startswith('win') and (not executable_path or not os.path.exists(executable_path)):
-                    raise FileNotFoundError("Browser executable not found or not accessible")
-                
-                logger.debug(f"Launching browser with executable path: {executable_path}")
-                
-                # Launch the browser with appropriate settings
-                self._browser = await self._playwright.chromium.launch(
-                    headless=True,
-                    executable_path=executable_path if sys.platform.startswith('win') else None,
-                    args=[
-                        '--disable-gpu',
-                        '--no-sandbox',
-                        '--disable-dev-shm-usage',
-                        '--disable-setuid-sandbox',
-                        '--disable-web-security',
-                        '--disable-features=IsolateOrigins,site-per-process',
-                        '--disable-blink-features=AutomationControlled'
-                    ]
-                )
-                logger.debug("Browser launched successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize Playwright: {str(e)}")
-                if self._playwright:
-                    await self._playwright.stop()
-                    self._playwright = None
-                raise
+                        logger.debug(f"Using browser at: {executable_path}")
+                    else:
+                        # In development, let Playwright find the browser
+                        executable_path = None
+                        logger.debug("Development mode - letting Playwright find browser")
+                    
+                    # Launch browser with appropriate settings
+                    self._browser = await self._playwright.chromium.launch(
+                        executable_path=executable_path,
+                        headless=True
+                    )
+                    
+                    # Create a context with stealth settings
+                    self._context = await self._browser.new_context(
+                        viewport={'width': 1920, 'height': 1080},
+                        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        java_script_enabled=True
+                    )
+                    
+                    logger.info("Playwright resources initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error initializing Playwright: {e}")
+                    if self._playwright:
+                        await self._playwright.stop()
+                        self._playwright = None
+                    raise
 
     async def cleanup(self):
         """Clean up Playwright resources"""
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
+        try:
+            if self._context:
+                await self._context.close()
+                self._context = None
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+        except Exception as e:
+            logger.error(f"Error during Playwright cleanup: {str(e)}")
+            raise
+
+    async def process_url(self, url: str) -> str:
+        """Process a URL and return its content"""
+        if not self._context:
+            await self.setup()
+        
+        try:
+            page = await self._context.new_page()
+            try:
+                # Navigate to the URL with a timeout
+                await page.goto(url, timeout=30000, wait_until='networkidle')
+                
+                # Wait for the main content to load
+                await page.wait_for_load_state('domcontentloaded')
+                await asyncio.sleep(2)  # Allow dynamic content to load
+                
+                # Get the page content
+                content = await page.content()
+                return content
+                
+            finally:
+                await page.close()
+                
+        except Exception as e:
+            logger.error(f"Error processing URL {url}: {str(e)}")
+            raise
+
+class WebContentExtractor(PlaywrightCrawler):
+    """Handles web content extraction with improved efficiency"""
+    def __init__(self):
+        super().__init__()
 
     async def extract_content(self, url: str) -> str:
         """Extract content from webpage with improved error handling"""
-        if not self._browser:
+        if not self._context:
             await self.setup()
 
         async with self._lock:
             try:
-                context = await self._browser.new_context(
-                    viewport={'width': 1920, 'height': 1080},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    java_script_enabled=True
-                )
-                
-                # Add stealth mode scripts
-                await context.add_init_script("""
-                    Object.defineProperty(navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                """)
-                
-                page = await context.new_page()
+                page = await self._context.new_page()
                 try:
+                    # Add stealth mode scripts
+                    await page.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        });
+                    """)
+                    
                     # Configure page
                     await page.set_extra_http_headers({
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -568,7 +560,6 @@ class WebContentExtractor:
                     
                 finally:
                     await page.close()
-                    await context.close()
                     
             except Exception as e:
                 logger.error(f"Error extracting content from {url}: {e}")
@@ -923,58 +914,6 @@ class ContentProcessor:
         except Exception as e:
             logger.error(f"Error processing URL {url}: {e}")
             raise
-
-class PlaywrightCrawler:
-    """Handles web crawling with improved resource management"""
-    def __init__(self):
-        self._lock = AsyncLock()
-        self._playwright = None
-        self._browser = None
-        self._context = None
-
-    async def __aenter__(self):
-        await self.setup()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.cleanup()
-
-    async def setup(self):
-        """Initialize Playwright resources"""
-        async with self._lock:
-            if not self._playwright:
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch()
-                self._context = await self._browser.new_context()
-
-    async def cleanup(self):
-        """Clean up Playwright resources"""
-        async with self._lock:
-            if self._context:
-                await self._context.close()
-            if self._browser:
-                await self._browser.close()
-            if self._playwright:
-                await self._playwright.stop()
-            self._context = None
-            self._browser = None
-            self._playwright = None
-
-    async def process_url(self, url: str) -> str:
-        """Process a single URL and return its content"""
-        if not self._browser:
-            await self.setup()
-
-        async with self._lock:
-            try:
-                page = await self._context.new_page()
-                await page.goto(url)
-                content = await page.content()
-                await page.close()
-                return content
-            except Exception as e:
-                logger.error(f"Error processing URL {url}: {e}")
-                raise
 
 async def review_and_save_results(entries: List[Dict], destination_file: str) -> bool:
     """Review and optionally edit results before saving. Returns True if saved, False if exited."""

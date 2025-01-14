@@ -25,6 +25,7 @@ from jinja2 import FileSystemLoader, Environment
 import atexit
 import time
 from spotscrape.message_handler import gui_message, send_progress, message_queue, progress_queue
+from pathlib import Path
 
 """
 File Structure:
@@ -37,6 +38,22 @@ File Structure:
     spot-main-*.log      - Main application flow
 """
 
+def get_log_dir():
+    """Get the log directory path based on whether running as executable or script"""
+    if getattr(sys, 'frozen', False):
+        # Running as executable - use logs directory in dist
+        if hasattr(sys, '_MEIPASS'):
+            # Running from PyInstaller bundle
+            base_dir = Path(sys._MEIPASS)
+        else:
+            # Running from executable directory
+            base_dir = Path(sys.executable).parent
+        return str(base_dir / 'logs')
+    else:
+        # Running as script - use src/spotscrape/logs
+        base_dir = Path(__file__).parent.resolve()  # Ensure absolute path
+        return str(base_dir / 'logs')
+
 # Configure debug logging
 def setup_debug_logging():
     """Set up debug logging with enhanced configuration"""
@@ -44,29 +61,20 @@ def setup_debug_logging():
     debug_logger.setLevel(logging.DEBUG)
     debug_logger.propagate = False  # Prevent propagation to root logger
     
-    # Get the appropriate log directory
-    if getattr(sys, 'frozen', False):
-        # When running as executable, use user's documents folder
-        base_dir = os.path.expanduser('~')
-        log_dir = os.path.join(base_dir, "SpotScrape", "logs")
-    else:
-        # When running as script, use the source directory
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        log_dir = os.path.join(base_dir, "logs")
-    
-    # Create logs directory if it doesn't exist
+    # Get log directory
+    log_dir = get_log_dir()
     os.makedirs(log_dir, exist_ok=True)
     
     # Create or overwrite the debug log file
     log_path = os.path.join(log_dir, f"spot-debug-{datetime.now().strftime('%Y%m%d')}.log")
     
-    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='ignore')
     file_handler.setLevel(logging.DEBUG)
     
     # Use simpler timestamp format without milliseconds
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'  # Simplified timestamp format
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
     file_handler.setFormatter(formatter)
     
@@ -75,7 +83,7 @@ def setup_debug_logging():
         debug_logger.removeHandler(handler)
     
     debug_logger.addHandler(file_handler)
-    debug_logger.info(f"Log file created at: {log_path}")
+    debug_logger.info(f"Debug Log file created at: {log_path}")
     return debug_logger
 
 # Initialize debug logger
@@ -103,17 +111,43 @@ debug_logger.disabled = False
 logging.getLogger().setLevel(logging.ERROR)
 logging.getLogger().handlers = []
 
+def get_app_dirs():
+    """Get application directories based on whether running as executable or script"""
+    if getattr(sys, 'frozen', False):
+        if hasattr(sys, '_MEIPASS'):
+            # Running from PyInstaller bundle - use _MEIPASS as base
+            base_dir = Path(sys._MEIPASS).resolve()  # Ensure absolute path
+            debug_logger.info("Running from PyInstaller bundle")
+            debug_logger.info(f"MEIPASS directory: {base_dir}")
+        else:
+            # Running from executable directory
+            base_dir = Path(sys.executable).parent.resolve()  # Ensure absolute path
+            debug_logger.info("Running from executable directory")
+            debug_logger.info(f"Executable directory: {base_dir}")
+            
+        # In frozen mode, frontend files are in the root of _MEIPASS
+        template_dir = base_dir / 'frontend' / 'templates'
+        static_dir = base_dir / 'frontend' / 'static'
+    else:
+        # Running as script - use package directory
+        base_dir = Path(__file__).parent.resolve()  # Ensure absolute path
+        debug_logger.info("Running in development mode")
+        debug_logger.info(f"Package directory: {base_dir}")
+        
+        # In dev mode, frontend files are in the package directory
+        template_dir = base_dir / 'frontend' / 'templates'
+        static_dir = base_dir / 'frontend' / 'static'
+    
+    # Log all paths for debugging
+    debug_logger.info("Application directories:")
+    debug_logger.info(f"  Base directory (absolute): {base_dir}")
+    debug_logger.info(f"  Template directory (absolute): {template_dir}")
+    debug_logger.info(f"  Static directory (absolute): {static_dir}")
+    
+    return base_dir, template_dir, static_dir
+
 # Initialize Flask
-if getattr(sys, 'frozen', False):
-    # Running as compiled executable
-    base_dir = os.path.dirname(sys.executable)
-    template_dir = os.path.join(base_dir, '_internal', 'frontend', 'templates')
-    static_dir = os.path.join(base_dir, '_internal', 'frontend', 'static')
-else:
-    # Running as script
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    template_dir = os.path.join(base_dir, 'frontend', 'templates')
-    static_dir = os.path.join(base_dir, 'frontend', 'static')
+base_dir, template_dir, static_dir = get_app_dirs()
 
 # Add detailed debug logging for template and static directories
 debug_logger.info(f"Base directory: {base_dir}")
@@ -121,26 +155,26 @@ debug_logger.info(f"Template directory: {template_dir}")
 debug_logger.info(f"Static directory: {static_dir}")
 
 # Verify directories exist and list contents
-if not os.path.exists(template_dir):
+if not template_dir.exists():
     debug_logger.error(f"Template directory does not exist: {template_dir}")
     debug_logger.info("Available directories in base_dir:")
     try:
-        debug_logger.info(str(os.listdir(base_dir)))
-        if os.path.exists(os.path.join(base_dir, '_internal')):
-            debug_logger.info(f"Contents of _internal dir: {os.listdir(os.path.join(base_dir, '_internal'))}")
-            if os.path.exists(os.path.join(base_dir, '_internal', 'frontend')):
-                debug_logger.info(f"Contents of frontend dir: {os.listdir(os.path.join(base_dir, '_internal', 'frontend'))}")
+        debug_logger.info(str(list(base_dir.iterdir())))
+        frontend_dir = base_dir / 'frontend'
+        if frontend_dir.exists():
+            debug_logger.info(f"Contents of frontend dir: {list(frontend_dir.iterdir())}")
     except Exception as e:
         debug_logger.error(f"Error listing directories: {e}")
 
-if not os.path.exists(static_dir):
+if not static_dir.exists():
     debug_logger.error(f"Static directory does not exist: {static_dir}")
 
 # Create the Flask app with basic configuration
-app = Flask(__name__)
-app.static_folder = static_dir
-app.template_folder = template_dir
-app.jinja_loader = FileSystemLoader(template_dir)
+app = Flask(__name__, 
+           static_folder=str(static_dir),
+           template_folder=str(template_dir))
+
+app.jinja_loader = FileSystemLoader(str(template_dir))
 CORS(app)
 
 # Add debug route to verify template loading
@@ -335,9 +369,15 @@ async def scan_url():
             send_progress(95, "Saving results...")
             
             # Save results to file
-            data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+            if getattr(sys, 'frozen', False):
+                # Running as executable - use Documents folder
+                data_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'SpotScrape', 'data')
+            else:
+                # Running as script - use source directory
+                data_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SpotScrape_data"))
+            
             os.makedirs(data_dir, exist_ok=True)
-            url_file = os.path.normpath(os.path.join(data_dir, "spotscrape_url.json"))
+            url_file = os.path.join(data_dir, "spotscrape_url.json")
             
             try:
                 with open(url_file, 'w', encoding='utf-8') as f:
@@ -375,16 +415,10 @@ def setup_gpt_logging():
     """Set up GPT logging with enhanced configuration"""
     gpt_logger = logging.getLogger('spot-gpt')
     gpt_logger.setLevel(logging.DEBUG)
-    gpt_logger.propagate = False  # Prevent propagation to root logger
+    gpt_logger.propagate = False
     
-    # Get the executable's directory or current directory
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Create logs directory if it doesn't exist
-    log_dir = os.path.join(base_dir, "logs")
+    # Get log directory
+    log_dir = get_log_dir()
     os.makedirs(log_dir, exist_ok=True)
     
     # Create or overwrite the GPT log file
@@ -393,7 +427,6 @@ def setup_gpt_logging():
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='ignore')
     file_handler.setLevel(logging.DEBUG)
     
-    # Use simpler timestamp format without milliseconds
     formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'

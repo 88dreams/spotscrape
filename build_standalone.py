@@ -2,414 +2,258 @@ import PyInstaller.__main__
 import sys
 import os
 import shutil
-import hashlib
-from pathlib import Path
 import logging
 from datetime import datetime
-from importlib.metadata import version
+import subprocess
+from pathlib import Path
 
-def setup_build_logging():
+def setup_logging():
     """Set up logging for the build process"""
-    # Get the executable's directory or current directory
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+    # Create logs directory in the project root
+    base_dir = Path(__file__).parent.resolve()
+    log_dir = base_dir / 'logs'
+    log_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create dist/logs directory if it doesn't exist
-    log_dir = os.path.join(base_dir, "dist", "logs")
-    os.makedirs(log_dir, exist_ok=True)
+    # Set up log file with timestamp
+    log_file = log_dir / f"spot-build-{datetime.now().strftime('%Y%m%d')}.log"
     
-    # Create or overwrite the build log file
-    log_path = os.path.join(log_dir, f"spot-build-{datetime.now().strftime('%Y%m%d')}.log")
+    # Create a logger
+    logger = logging.getLogger('spot-build')
+    logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture everything
     
-    # Configure root logger to capture all output
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
     
-    # Remove any existing handlers from both loggers
-    root_logger.handlers = []
+    # Create file handler with more detailed format
+    file_handler = logging.FileHandler(str(log_file), mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
     
-    # File handler for all output
-    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
-    
-    # Console handler
+    # Create console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     
-    # Create formatter
-    formatter = logging.Formatter(
+    # Create formatters - more detailed for file, concise for console
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s\n'
+        'Path: %(pathname)s\n'
+        'Details: %(exc_info)s\n',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    console_formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    file_handler.setFormatter(formatter)
-    console_handler.setFormatter(formatter)
     
-    # Add handlers to root logger
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
+    # Add formatters to handlers
+    file_handler.setFormatter(file_formatter)
+    console_handler.setFormatter(console_formatter)
     
-    # Create our build logger as a child of root
-    build_logger = logging.getLogger('spot-build')
-    build_logger.setLevel(logging.INFO)
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
     
-    # Log initial message
-    build_logger.info(f"Build log file created at: {log_path}")
-    return build_logger
+    # Prevent propagation to root logger
+    logger.propagate = False
+    
+    # Test logging with full details
+    logger.info(f"Build log file created at: {log_file}")
+    logger.debug("Logging system initialized with full message capture")
+    
+    return logger
 
-# Initialize build logger
-build_logger = setup_build_logging()
-
-def log_and_print(message, level=logging.INFO):
-    """Helper function to log message and print to console"""
-    if level == logging.ERROR:
-        build_logger.error(message)
-    elif level == logging.WARNING:
-        build_logger.warning(message)
-    else:
-        build_logger.info(message)
-
-def cleanup_build_artifacts():
-    """Clean up previous build artifacts"""
-    log_and_print("Cleaning up previous build artifacts...")
+def cleanup_artifacts(logger):
+    """Clean up build artifacts"""
+    paths_to_clean = ['build', 'dist', '__pycache__', '.pytest_cache']
+    spec_files = Path().glob('*.spec')
     
-    # Clean build and dist directories
-    paths_to_remove = ['build', '.pytest_cache']
-    spec_files = [f for f in os.listdir('.') if f.endswith('.spec')]
-    
-    cleaned_count = {'dirs': 0, 'files': 0}
-    
-    # Special handling for dist directory to preserve logs
-    if os.path.exists('dist'):
-        try:
-            for item in os.listdir('dist'):
-                item_path = os.path.join('dist', item)
-                if item != 'logs':  # Skip the logs directory
-                    if os.path.isdir(item_path):
-                        shutil.rmtree(item_path)
-                        cleaned_count['dirs'] += 1
-                        log_and_print(f"Removed directory: {item_path}")
-                    elif os.path.isfile(item_path):
-                        os.remove(item_path)
-                        cleaned_count['files'] += 1
-                        log_and_print(f"Removed file: {item_path}")
-        except Exception as e:
-            log_and_print(f"Error cleaning dist directory: {e}", logging.ERROR)
-    
-    # Remove other artifacts
-    for path in paths_to_remove + spec_files:
-        try:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-                cleaned_count['dirs'] += 1
-                log_and_print(f"Removed directory: {path}")
-            elif os.path.isfile(path):
-                os.remove(path)
-                cleaned_count['files'] += 1
-                log_and_print(f"Removed file: {path}")
-        except Exception as e:
-            log_and_print(f"Error removing {path}: {e}", logging.ERROR)
-    
-    # Clean __pycache__ directories and .pyc files
-    for root, dirs, files in os.walk('.'):
-        # Skip virtual environment directories
-        if 'virtual' in dirs:
-            dirs.remove('virtual')
-        if '.git' in dirs:
-            dirs.remove('.git')
+    for path in paths_to_clean:
+        if os.path.exists(path):
+            shutil.rmtree(path)
+            logger.info(f"Removed {path}")
             
-        for dir_name in dirs:
-            if dir_name == '__pycache__' or dir_name == '.pytest_cache':
-                cache_dir = os.path.join(root, dir_name)
-                try:
-                    shutil.rmtree(cache_dir)
-                    cleaned_count['dirs'] += 1
-                    log_and_print(f"Removed cache directory: {cache_dir}")
-                except Exception as e:
-                    log_and_print(f"Error removing cache directory {cache_dir}: {e}", logging.ERROR)
-        
-        for file in files:
-            if file.endswith('.pyc'):
-                pyc_file = os.path.join(root, file)
-                try:
-                    os.remove(pyc_file)
-                    cleaned_count['files'] += 1
-                    log_and_print(f"Removed .pyc file: {pyc_file}")
-                except Exception as e:
-                    log_and_print(f"Error removing .pyc file {pyc_file}: {e}", logging.ERROR)
-    
-    log_and_print(f"Cleanup complete: Removed {cleaned_count['dirs']} directories and {cleaned_count['files']} files")
+    for spec_file in spec_files:
+        spec_file.unlink()
+        logger.info(f"Removed {spec_file}")
 
-def calculate_file_hash(file_path):
-    """Calculate SHA-256 hash of a file"""
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
-
-def verify_file_permissions(file_path):
-    """Verify file permissions are correct"""
-    try:
-        # Check if file is readable
-        if not os.access(file_path, os.R_OK):
-            log_and_print(f"Warning: File not readable: {file_path}", logging.WARNING)
-            return False
-        # For executables, check if they're executable
-        if file_path.endswith('.exe') and not os.access(file_path, os.X_OK):
-            log_and_print(f"Warning: Executable not executable: {file_path}", logging.WARNING)
-            return False
-        return True
-    except Exception as e:
-        log_and_print(f"Error checking permissions for {file_path}: {e}", logging.ERROR)
-        return False
-
-def verify_build():
-    """Verify that all required files are present in the build"""
-    log_and_print("Verifying build...")
+def check_dependencies(logger):
+    """Verify required dependencies are installed"""
+    required = {
+        'flask': 'flask',
+        'webview': 'pywebview',
+        'spotipy': 'spotipy',
+        'playwright': 'playwright',
+        'PyInstaller': 'pyinstaller'
+    }
     
-    # Get base paths
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    dist_dir = os.path.join(base_dir, 'dist', 'spotscrape')
-    internal_dir = os.path.join(dist_dir, '_internal')
-    frontend_dir = os.path.join(internal_dir, 'frontend')
-    
-    # Check executable
-    exe_name = 'spotscrape.exe' if sys.platform == 'win32' else 'spotscrape'
-    exe_path = os.path.join(dist_dir, exe_name)
-    if not os.path.exists(exe_path):
-        log_and_print(f"Error: Executable not found at {exe_path}", logging.ERROR)
-        return False
-    log_and_print(f"✓ Found executable: {exe_path}")
-    
-    # Required directories
-    required_dirs = [
-        frontend_dir,
-        os.path.join(frontend_dir, 'templates'),
-        os.path.join(frontend_dir, 'static'),
-        os.path.join(frontend_dir, 'static', 'css'),
-        os.path.join(frontend_dir, 'static', 'js')
-    ]
-    
-    # Check directories
-    for dir_path in required_dirs:
-        if not os.path.exists(dir_path):
-            log_and_print(f"Error: Directory not found at {dir_path}", logging.ERROR)
-            # List parent directory contents for debugging
-            parent_dir = os.path.dirname(dir_path)
-            if os.path.exists(parent_dir):
-                log_and_print(f"Contents of {parent_dir}:", logging.INFO)
-                try:
-                    log_and_print(str(os.listdir(parent_dir)), logging.INFO)
-                except Exception as e:
-                    log_and_print(f"Error listing directory contents: {e}", logging.ERROR)
-            return False
-        log_and_print(f"✓ Found directory: {dir_path}")
-    
-    # Required files
-    required_files = [
-        os.path.join(frontend_dir, 'templates', 'index.html'),
-        os.path.join(frontend_dir, 'static', 'css', 'styles.css'),
-        os.path.join(frontend_dir, 'static', 'js', 'app.js'),
-        os.path.join(internal_dir, 'config.json.example'),
-        os.path.join(internal_dir, '.env.example')
-    ]
-    
-    # Check files
-    for file_path in required_files:
-        if not os.path.exists(file_path):
-            log_and_print(f"Error: File not found at {file_path}", logging.ERROR)
-            return False
-        if not os.access(file_path, os.R_OK):
-            log_and_print(f"Error: File not readable at {file_path}", logging.ERROR)
-            return False
-        log_and_print(f"✓ Found file: {file_path}")
-    
-    log_and_print("✓ Build verification complete")
-    return True
-
-def check_dependencies():
-    """Check if all required dependencies are installed"""
-    required_packages = [
-        'flask',
-        'webview',
-        'spotipy',
-        'playwright',
-        'PyInstaller'
-    ]
-    
-    missing_packages = []
-    for package in required_packages:
+    missing = []
+    for module, package in required.items():
         try:
-            __import__(package)
+            __import__(module)
+            logger.info(f"Found required dependency: {package}")
         except ImportError:
-            # Convert webview back to pywebview for pip install message
-            pip_package = 'pywebview' if package == 'webview' else package
-            missing_packages.append(pip_package)
+            missing.append(package)
+            logger.error(f"Missing dependency: {package}")
     
-    if missing_packages:
-        error_msg = (
-            f"Missing required dependencies: {', '.join(missing_packages)}\n"
-            f"Please install them using: pip install {' '.join(missing_packages)}"
-        )
-        log_and_print(error_msg, logging.ERROR)
-        raise ImportError(error_msg)
+    if missing:
+        raise ImportError(f"Missing dependencies: {', '.join(missing)}")
+
+def get_browser_path(logger):
+    """Get the Playwright browser path"""
+    # Install Playwright browser
+    logger.info("Installing Playwright browser...")
+    subprocess.run(
+        [sys.executable, '-m', 'playwright', 'install', 'chromium', '--with-deps'],
+        check=True, capture_output=True
+    )
+    
+    # Common browser locations
+    search_paths = [
+        Path.home() / 'AppData' / 'Local' / 'ms-playwright',  # Windows
+        Path.home() / '.cache' / 'ms-playwright',  # Linux
+        Path.cwd() / 'playwright-browsers',
+        Path(sys.executable).parent / 'playwright-browsers'
+    ]
+    
+    for base_dir in search_paths:
+        if base_dir.exists():
+            for item in base_dir.iterdir():
+                if item.name.startswith('chromium'):
+                    logger.info(f"Found Playwright browser at: {item}")
+                    return str(item)
+    
+    logger.error("Playwright browser not found in any of the search paths")
+    raise FileNotFoundError("Playwright browser not found")
 
 def build_standalone(dev_mode=False):
     """Build the standalone executable"""
+    logger = setup_logging()
+    logger.info("Starting build process...")
+    
     try:
-        # Check dependencies first
-        check_dependencies()
+        # Initial cleanup
+        cleanup_artifacts(logger)
+        check_dependencies(logger)
         
-        # Install Playwright browser if not already installed
-        log_and_print("\nChecking Playwright browser installation...")
-        import subprocess
-        try:
-            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], 
-                         check=True, capture_output=True)
-            log_and_print("Chromium installation completed")
-        except subprocess.CalledProcessError as e:
-            log_and_print(f"Failed to install Chromium: {e.output.decode() if e.output else str(e)}", logging.ERROR)
-            raise
+        # Set up paths - ensure all paths are absolute
+        base_dir = Path(__file__).parent.resolve()  # Project root
+        src_dir = (base_dir / 'src' / 'spotscrape').resolve()  # Source package
+        dist_dir = (base_dir / 'dist').resolve()  # Build output
+        build_dir = (base_dir / 'build').resolve()  # Build temp
         
-        # Log versions of key dependencies using importlib.metadata
-        log_and_print("\nDependency Versions:")
-        log_and_print(f"Python: {sys.version.split()[0]}")
-        log_and_print(f"Flask: {version('flask')}")
-        log_and_print(f"PyWebView: {version('pywebview')}")
-        log_and_print(f"Spotipy: {version('spotipy')}")
-        log_and_print(f"Playwright: {version('playwright')}")
-        log_and_print(f"PyInstaller: {version('pyinstaller')}")
+        # Frontend source directories
+        templates_dir = (src_dir / 'frontend' / 'templates').resolve()
+        static_dir = (src_dir / 'frontend' / 'static').resolve()
         
-        # Clean up before building
-        cleanup_build_artifacts()
-
-        # Get absolute base path and source paths
-        base_path = os.path.abspath(os.path.dirname(__file__))
-        src_path = os.path.join(base_path, 'src', 'spotscrape')
-        frontend_path = os.path.join(src_path, 'frontend')
+        # Get browser path
+        browser_path = Path(get_browser_path(logger)).resolve()
         
-        # Find Playwright browser path
-        import site
-        site_packages = site.getsitepackages()[0]
-        playwright_path = os.path.join(site_packages, 'playwright')
-        browser_path = None
+        # Log all paths
+        logger.info("Build paths (all absolute):")
+        logger.info(f"  Project root:      {base_dir}")
+        logger.info(f"  Source package:    {src_dir}")
+        logger.info(f"  Build directory:   {build_dir}")
+        logger.info(f"  Output directory:  {dist_dir}")
+        logger.info(f"  Templates source:  {templates_dir}")
+        logger.info(f"  Static source:     {static_dir}")
+        logger.info(f"  Browser binary:    {browser_path}")
         
-        # Look for the browser in common locations
-        possible_paths = [
-            os.path.join(os.path.expanduser('~'), 'AppData', 'Local', 'ms-playwright'),
-            os.path.join(os.path.expanduser('~'), '.cache', 'ms-playwright'),
-            os.path.join(os.getcwd(), 'playwright-browsers'),
-            os.path.join(os.path.dirname(sys.executable), 'playwright-browsers')
+        # Verify source directories
+        if not templates_dir.exists():
+            raise FileNotFoundError(f"Templates directory not found: {templates_dir}")
+        if not static_dir.exists():
+            raise FileNotFoundError(f"Static directory not found: {static_dir}")
+            
+        # Define data files - use relative paths for PyInstaller destinations
+        data_files = [
+            (str(templates_dir), 'frontend/templates'),  # Will be at root of _MEIPASS
+            (str(static_dir), 'frontend/static'),       # Will be at root of _MEIPASS
+            (str(src_dir / 'config.json.example'), '.'),
+            (str(src_dir / '.env.example'), '.')
         ]
         
-        for base_dir in possible_paths:
-            if os.path.exists(base_dir):
-                for item in os.listdir(base_dir):
-                    if item.startswith('chromium-'):
-                        chrome_path = os.path.join(base_dir, item)
-                        if os.path.exists(chrome_path):
-                            browser_path = chrome_path
-                            log_and_print(f"Found browser at: {browser_path}")
-                            break
-                if browser_path:
-                    break
-        
-        if not browser_path:
-            raise FileNotFoundError("Could not find Playwright browser installation")
-        
-        # Platform-specific settings
-        if sys.platform.startswith('win'):
-            icon = os.path.join(frontend_path, 'static', 'img', 'icon.ico')
-        else:
-            icon = None
-
         # Base PyInstaller arguments
         args = [
-            os.path.join(src_path, 'app.py'),
+            str(src_dir / 'app.py'),  # Entry point
             '--name=spotscrape',
             '--onedir',
             '--clean',
-            '--noconfirm'
+            '--noconfirm',
+            '--distpath', str(dist_dir),
+            '--workpath', str(build_dir),
+            '--specpath', str(base_dir)
         ]
-
-        # Add windowed mode in production
-        if not dev_mode:
-            args.append('--windowed')
-
-        # Add icon if it exists
-        if icon and os.path.exists(icon):
-            args.append(f'--icon={icon}')
-            log_and_print(f"Using icon: {icon}")
-
-        # Add data files with consistent forward slashes
-        data_args = [
-            f'--add-data={os.path.join(src_path, "frontend").replace(os.sep, "/")};frontend',
-            f'--add-data={os.path.join(src_path, "config.json.example").replace(os.sep, "/")};.',
-            f'--add-data={os.path.join(src_path, ".env.example").replace(os.sep, "/")};.',
-            f'--add-data={browser_path.replace(os.sep, "/")};playwright'  # Add Playwright browser
-        ]
-        args.extend(data_args)
-
+        
+        # Add browser binary - will be at root of _MEIPASS
+        separator = ";" if sys.platform.startswith('win') else ":"
+        browser_arg = f"{str(browser_path)}{separator}playwright-browser"
+        logger.info(f"Adding browser binary: {browser_arg}")
+        args.extend(['--add-binary', browser_arg])
+        
+        # Add data files
+        for src, dst in data_files:
+            data_arg = f'{str(src)}{";" if sys.platform.startswith("win") else ":"}{dst}'
+            args.extend(['--add-data', data_arg])
+        
+        # Add icon if available
+        icon_path = static_dir / 'img' / 'icon.ico'
+        if sys.platform.startswith('win') and icon_path.exists():
+            args.extend(['--icon', str(icon_path)])
+        
         # Add hidden imports
         hidden_imports = [
             'flask', 'flask_cors', 'webview', 'playwright', 'spotipy',
             'openai', 'asyncio', 'aiohttp', 'requests', 'json',
             'logging', 'bs4', 'lxml', 'jinja2', 'jinja2.ext',
             'werkzeug', 'werkzeug.serving', 'werkzeug.debug',
-            'clr_loader', 'pythonnet'
+            'clr_loader', 'pythonnet', 'tzdata', 'zoneinfo',
+            'email_validator'
         ]
-
-        # Add timezone imports if available
-        try:
-            import tzdata
-            hidden_imports.extend(['tzdata', 'zoneinfo'])
-        except ImportError:
-            log_and_print("Warning: tzdata not found", logging.WARNING)
-
-        # Add Windows-specific imports if available
-        if sys.platform.startswith('win'):
-            try:
-                import win32api
-                import win32con
-                hidden_imports.extend(['win32api', 'win32con'])
-            except ImportError:
-                log_and_print("Warning: win32api/win32con not found", logging.WARNING)
-
-        # Add hidden imports to arguments
+        
         for imp in hidden_imports:
             args.extend(['--hidden-import', imp])
-            log_and_print(f"Adding hidden import: {imp}")
-
-        # Add debug options in dev mode
+        
+        # Add mode-specific settings
         if dev_mode:
             args.extend(['--debug=all', '--log-level=DEBUG'])
         else:
-            args.append('--log-level=INFO')
-
-        # Print final PyInstaller command
-        log_and_print("\nPyInstaller command:")
-        log_and_print(" ".join(args))
-        log_and_print("\nBuilding application...")
+            args.extend(['--windowed', '--log-level=INFO'])
         
-        # Run PyInstaller
+        # Log and run PyInstaller
+        logger.info("PyInstaller command:")
+        logger.info(" ".join(args))
         PyInstaller.__main__.run(args)
-
-        # Verify the build
-        if not verify_build():
-            log_and_print("\nBuild verification failed!", logging.ERROR)
-            sys.exit(1)
-        log_and_print("\nBuild completed successfully!")
+        
+        # Verify build was created
+        app_dir = (dist_dir / 'spotscrape').resolve()
+        if not app_dir.exists():
+            raise FileNotFoundError(f"Build directory not created: {app_dir}")
+            
+        # Log build contents
+        logger.info("Build contents:")
+        for item in app_dir.rglob('*'):
+            logger.info(f"  {item.relative_to(app_dir)}")
+            
+        # Verify the executable was created
+        if sys.platform.startswith('win'):
+            exe_path = app_dir / 'spotscrape.exe'
+        else:
+            exe_path = app_dir / 'spotscrape'
+            
+        if not exe_path.exists():
+            raise FileNotFoundError(f"Executable not created: {exe_path}")
+        
+        logger.info("Build completed successfully!")
+        logger.info(f"Application built at: {app_dir}")
+        
     except Exception as e:
-        log_and_print(f"\nError during build: {e}", logging.ERROR)
-        sys.exit(1)
+        logger.error(f"Build failed: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     try:
-        # Check if --dev flag is passed
-        dev_mode = '--dev' in sys.argv
-        build_standalone(dev_mode)
+        build_standalone('--dev' in sys.argv)
     except Exception as e:
-        log_and_print(f"Fatal error: {e}", logging.ERROR)
+        logging.error(f"Fatal error: {e}")
         sys.exit(1) 
