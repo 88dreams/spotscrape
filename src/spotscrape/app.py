@@ -40,51 +40,94 @@ File Structure:
 
 def get_log_dir():
     """Get the log directory path based on whether running as executable or script"""
-    if getattr(sys, 'frozen', False):
-        # Running as executable - use logs directory in dist
-        if hasattr(sys, '_MEIPASS'):
-            # Running from PyInstaller bundle
-            base_dir = Path(sys._MEIPASS)
-        else:
-            # Running from executable directory
+    try:
+        if getattr(sys, 'frozen', False):
+            # Running as executable - use logs directory next to the executable
             base_dir = Path(sys.executable).parent
-        return str(base_dir / 'logs')
-    else:
-        # Running as script - use src/spotscrape/logs
-        base_dir = Path(__file__).parent.resolve()  # Ensure absolute path
-        return str(base_dir / 'logs')
+            print(f"Running as executable, base directory: {base_dir}")  # Temporary print for debugging
+        else:
+            # Running as script - use current directory
+            base_dir = Path(__file__).parent.resolve()  # Make sure we get absolute path
+            print(f"Running as script, base directory: {base_dir}")  # Temporary print for debugging
+
+        # Create logs directory in the base directory
+        log_dir = base_dir / 'logs'
+        
+        # Ensure directory exists with explicit creation
+        os.makedirs(str(log_dir), exist_ok=True)
+        
+        # Verify directory was created and is writable
+        if not log_dir.exists():
+            raise OSError(f"Failed to create log directory: {log_dir}")
+        if not os.access(str(log_dir), os.W_OK):
+            raise OSError(f"Log directory is not writable: {log_dir}")
+            
+        print(f"Log directory created/verified at: {log_dir}")  # Temporary print for debugging
+        return str(log_dir)
+    except Exception as e:
+        print(f"Error setting up log directory: {str(e)}")  # Temporary print for debugging
+        # Fallback to a local logs directory
+        fallback_dir = Path.cwd() / 'logs'
+        os.makedirs(str(fallback_dir), exist_ok=True)
+        print(f"Using fallback log directory: {fallback_dir}")  # Temporary print for debugging
+        return str(fallback_dir)
 
 # Configure debug logging
 def setup_debug_logging():
     """Set up debug logging with enhanced configuration"""
-    debug_logger = logging.getLogger('spot-debug')
-    debug_logger.setLevel(logging.DEBUG)
-    debug_logger.propagate = False  # Prevent propagation to root logger
-    
-    # Get log directory
-    log_dir = get_log_dir()
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # Create or overwrite the debug log file
-    log_path = os.path.join(log_dir, f"spot-debug-{datetime.now().strftime('%Y%m%d')}.log")
-    
-    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='ignore')
-    file_handler.setLevel(logging.DEBUG)
-    
-    # Use simpler timestamp format without milliseconds
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    file_handler.setFormatter(formatter)
-    
-    # Remove any existing handlers
-    for handler in debug_logger.handlers[:]:
-        debug_logger.removeHandler(handler)
-    
-    debug_logger.addHandler(file_handler)
-    debug_logger.info(f"Debug Log file created at: {log_path}")
-    return debug_logger
+    try:
+        debug_logger = logging.getLogger('spot-debug')
+        debug_logger.setLevel(logging.DEBUG)
+        debug_logger.propagate = False  # Prevent propagation to root logger
+        
+        # Get log directory
+        log_dir = get_log_dir()
+        print(f"Setting up debug logging in: {log_dir}")  # Temporary print for debugging
+        
+        # Create or overwrite the debug log file
+        log_path = os.path.join(log_dir, f"spot-debug-{datetime.now().strftime('%Y%m%d')}.log")
+        print(f"Debug log file will be: {log_path}")  # Temporary print for debugging
+        
+        # Remove any existing handlers
+        for handler in debug_logger.handlers[:]:
+            debug_logger.removeHandler(handler)
+        
+        # Create file handler with explicit error handling
+        try:
+            file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='ignore')
+            file_handler.setLevel(logging.DEBUG)
+            
+            # Use simpler timestamp format without milliseconds
+            formatter = logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            file_handler.setFormatter(formatter)
+            debug_logger.addHandler(file_handler)
+            
+            # Ensure the logger is enabled
+            debug_logger.disabled = False
+            
+            # Test the logger
+            debug_logger.info(f"Debug Log file created at: {log_path}")
+            debug_logger.info("Debug logging initialized and enabled")
+            
+            print(f"Debug logging successfully initialized to: {log_path}")  # Temporary print for debugging
+            return debug_logger
+            
+        except Exception as e:
+            print(f"Error creating log file handler: {str(e)}")  # Temporary print for debugging
+            raise
+            
+    except Exception as e:
+        print(f"Error in setup_debug_logging: {str(e)}")  # Temporary print for debugging
+        # Create a basic console logger as fallback
+        console_logger = logging.getLogger('spot-debug-console')
+        console_logger.setLevel(logging.DEBUG)
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        console_logger.addHandler(console_handler)
+        return console_logger
 
 # Initialize debug logger
 debug_logger = setup_debug_logging()
@@ -99,17 +142,19 @@ app = Flask(__name__)
 app.logger.disabled = True
 app.config['PROPAGATE_EXCEPTIONS'] = False
 
-# Disable all loggers
-for logger_name in logging.root.manager.loggerDict:
-    logging.getLogger(logger_name).disabled = True
-    logging.getLogger(logger_name).propagate = False
-
-# Re-enable only our debug logger
-debug_logger.disabled = False
-
 # Configure root logger to prevent console output
 logging.getLogger().setLevel(logging.ERROR)
 logging.getLogger().handlers = []
+
+# Disable other loggers but keep debug logger enabled
+for logger_name in logging.root.manager.loggerDict:
+    if logger_name not in ['spot-debug', 'spot-main', 'spot-gpt']:
+        logging.getLogger(logger_name).disabled = True
+        logging.getLogger(logger_name).propagate = False
+
+# Ensure debug logger is explicitly enabled
+debug_logger.disabled = False
+debug_logger.propagate = False
 
 def get_app_dirs():
     """Get application directories based on whether running as executable or script"""

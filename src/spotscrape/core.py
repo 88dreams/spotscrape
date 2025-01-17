@@ -63,7 +63,8 @@ def get_packaged_browser_path():
         if getattr(sys, 'frozen', False):
             # Running in a PyInstaller bundle
             base_path = sys._MEIPASS
-            browser_path = os.path.join(base_path, 'playwright')
+            browser_dir = os.path.join(base_path, '_internal', 'playwright', 'driver', 'package', '.local-browsers', 'chromium_headless_shell-1148')
+            browser_path = os.path.join(browser_dir, 'chrome-win', 'headless_shell.exe')
             logger.debug(f"Running in PyInstaller bundle. Browser path: {browser_path}")
             return browser_path
         else:
@@ -74,7 +75,7 @@ def get_packaged_browser_path():
                 chromium_dir = None
                 if os.path.exists(base_path):
                     for item in os.listdir(base_path):
-                        if item.startswith('chromium-'):
+                        if item.startswith('chromium_headless_shell-'):
                             chromium_dir = item
                             break
                 
@@ -89,7 +90,7 @@ def get_packaged_browser_path():
                     for alt_path in alt_paths:
                         if os.path.exists(alt_path):
                             for item in os.listdir(alt_path):
-                                if item.startswith('chromium-'):
+                                if item.startswith('chromium_headless_shell-'):
                                     chromium_dir = item
                                     base_path = alt_path
                                     break
@@ -100,7 +101,7 @@ def get_packaged_browser_path():
                     logger.error("Chromium browser directory not found in any known location")
                     raise Exception("Chromium browser directory not found. Please run 'playwright install chromium'")
                 
-                browser_path = os.path.join(base_path, chromium_dir)
+                browser_path = os.path.join(base_path, chromium_dir, 'chrome-win', 'headless_shell.exe')
                 logger.debug(f"Running in development environment. Browser path: {browser_path}")
                 return browser_path
             else:
@@ -430,8 +431,8 @@ class PlaywrightCrawler:
                     # Get the base directory and browser path
                     if getattr(sys, 'frozen', False):
                         base_path = os.path.dirname(sys.executable)
-                        # Look for browser in the specific bundled directory
-                        browser_dir = os.path.join(base_path, '_internal', 'playwright', 'chromium_headless_shell-1148')
+                        # Look for browser in Playwright's expected directory structure
+                        browser_dir = os.path.join(base_path, '_internal', 'playwright', 'driver', 'package', '.local-browsers', 'chromium_headless_shell-1148')
                         executable_path = os.path.join(browser_dir, 'chrome-win', 'headless_shell.exe')
                         
                         if not os.path.exists(executable_path):

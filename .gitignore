@@ -75,4 +75,20 @@ openai_credentials.json
 
 # Browser downloads
 playwright-browsers/
-playwright/ 
+playwright/
+
+# PyInstaller
+*.spec
+output.log
+
+# Additional build artifacts
+.cache*
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt 

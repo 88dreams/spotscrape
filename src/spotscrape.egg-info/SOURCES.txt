@@ -6,8 +6,10 @@ README.md
 config.json.example
 pyproject.toml
 requirements.txt
+src/spotscrape/.env.example
 src/spotscrape/__init__.py
 src/spotscrape/app.py
+src/spotscrape/config.json.example
 src/spotscrape/config_manager.py
 src/spotscrape/content_processor.py
 src/spotscrape/core.py

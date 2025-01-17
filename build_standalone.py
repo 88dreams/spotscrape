@@ -100,31 +100,97 @@ def check_dependencies(logger):
         raise ImportError(f"Missing dependencies: {', '.join(missing)}")
 
 def get_browser_path(logger):
-    """Get the Playwright browser path"""
-    # Install Playwright browser
-    logger.info("Installing Playwright browser...")
-    subprocess.run(
-        [sys.executable, '-m', 'playwright', 'install', 'chromium', '--with-deps'],
-        check=True, capture_output=True
-    )
+    """Get the path to the browser installation"""
+    try:
+        # First, ensure the browser is installed
+        import subprocess
+        logger.info("Installing/Verifying Playwright browser...")
+        result = subprocess.run(['playwright', 'install', 'chromium'], 
+                              check=True, capture_output=True, text=True)
+        logger.info(f"Playwright install output: {result.stdout}")
+        
+        # The browser is installed in the user's home directory
+        ms_playwright_path = Path.home() / 'AppData' / 'Local' / 'ms-playwright'
+        logger.info(f"Checking ms-playwright path: {ms_playwright_path}")
+        
+        if not ms_playwright_path.exists():
+            raise FileNotFoundError(f"ms-playwright directory not found at {ms_playwright_path}")
+            
+        # List all directories to help with debugging
+        logger.info("Available browser directories:")
+        for item in ms_playwright_path.iterdir():
+            logger.info(f"  {item}")
+            
+        # Look specifically for the headless shell directory
+        browser_dirs = list(ms_playwright_path.glob('chromium_headless_shell-*'))
+        if not browser_dirs:
+            raise FileNotFoundError(f"No chromium_headless_shell directory found in {ms_playwright_path}")
+            
+        browser_path = browser_dirs[0]  # Use the first found directory
+        logger.info(f"Using browser directory: {browser_path}")
+        
+        # Verify chrome-win directory exists
+        chrome_win = browser_path / 'chrome-win'
+        if not chrome_win.exists():
+            raise FileNotFoundError(f"chrome-win directory not found in {browser_path}")
+            
+        # Find the browser executable
+        exe_files = list(chrome_win.glob('*.exe'))
+        if not exe_files:
+            raise FileNotFoundError(f"No browser executable found in {chrome_win}")
+            
+        logger.info(f"Found browser executable: {exe_files[0]}")
+        return browser_path
+        
+    except Exception as e:
+        logger.error(f"Failed to find Playwright browser path: {e}")
+        raise
+
+def copy_playwright_files(src_dir, dst_dir, logger):
+    """Copy all necessary Playwright files"""
+    logger.info(f"Copying Playwright files from {src_dir} to {dst_dir}")
     
-    # Common browser locations
-    search_paths = [
-        Path.home() / 'AppData' / 'Local' / 'ms-playwright',  # Windows
-        Path.home() / '.cache' / 'ms-playwright',  # Linux
-        Path.cwd() / 'playwright-browsers',
-        Path(sys.executable).parent / 'playwright-browsers'
-    ]
-    
-    for base_dir in search_paths:
-        if base_dir.exists():
-            for item in base_dir.iterdir():
-                if item.name.startswith('chromium'):
-                    logger.info(f"Found Playwright browser at: {item}")
-                    return str(item)
-    
-    logger.error("Playwright browser not found in any of the search paths")
-    raise FileNotFoundError("Playwright browser not found")
+    try:
+        # First, copy the chrome-win directory
+        src_chrome_win = src_dir / 'chrome-win'
+        dst_chrome_win = dst_dir / 'chrome-win'
+        
+        logger.info(f"Copying chrome-win from {src_chrome_win} to {dst_chrome_win}")
+        if dst_chrome_win.exists():
+            shutil.rmtree(dst_chrome_win)
+        shutil.copytree(src_chrome_win, dst_chrome_win)
+        
+        # Verify and rename the executable if needed
+        exe_files = list(dst_chrome_win.glob('*.exe'))
+        if not exe_files:
+            raise FileNotFoundError(f"No executable found in {dst_chrome_win}")
+            
+        target_exe = dst_chrome_win / 'headless_shell.exe'
+        if exe_files[0].name != 'headless_shell.exe':
+            logger.info(f"Renaming {exe_files[0].name} to headless_shell.exe")
+            if target_exe.exists():
+                target_exe.unlink()
+            shutil.copy2(exe_files[0], target_exe)
+        
+        # Copy metadata files
+        for item in src_dir.glob('*'):
+            if item.is_file():
+                dest_file = dst_dir / item.name
+                logger.info(f"Copying: {item.name}")
+                shutil.copy2(item, dest_file)
+        
+        # Create validation files
+        for filename in ['DEPENDENCIES_VALIDATED', 'INSTALLATION_COMPLETE']:
+            metadata_file = dst_dir / filename
+            if not metadata_file.exists():
+                logger.info(f"Creating metadata file: {filename}")
+                metadata_file.touch()
+        
+        logger.info("All Playwright files copied successfully")
+        
+    except Exception as e:
+        logger.error(f"Error copying Playwright files: {e}")
+        raise
 
 def build_standalone(dev_mode=False):
     """Build the standalone executable"""
@@ -146,10 +212,16 @@ def build_standalone(dev_mode=False):
         templates_dir = (src_dir / 'frontend' / 'templates').resolve()
         static_dir = (src_dir / 'frontend' / 'static').resolve()
         
-        # Get browser path
-        browser_path = Path(get_browser_path(logger)).resolve()
+        # Set up Playwright directory structure
+        browser_dir = Path(get_browser_path(logger)).resolve()
+        local_browsers_dir = build_dir / '_internal' / 'playwright' / 'driver' / 'package' / '.local-browsers'
+        build_browser_dir = local_browsers_dir / browser_dir.name
         
-        # Log all paths
+        # Create directory and copy files
+        local_browsers_dir.mkdir(parents=True, exist_ok=True)
+        copy_playwright_files(browser_dir, build_browser_dir, logger)
+        
+        # Log paths for verification
         logger.info("Build paths (all absolute):")
         logger.info(f"  Project root:      {base_dir}")
         logger.info(f"  Source package:    {src_dir}")
@@ -157,7 +229,14 @@ def build_standalone(dev_mode=False):
         logger.info(f"  Output directory:  {dist_dir}")
         logger.info(f"  Templates source:  {templates_dir}")
         logger.info(f"  Static source:     {static_dir}")
-        logger.info(f"  Browser binary:    {browser_path}")
+        logger.info(f"  Browser source:    {browser_dir}")
+        logger.info(f"  Browser dest:      {build_browser_dir}")
+        
+        # Verify critical files
+        expected_exe = build_browser_dir / 'chrome-win' / 'headless_shell.exe'
+        if not expected_exe.exists():
+            raise FileNotFoundError(f"Browser executable not found at expected location: {expected_exe}")
+        logger.info(f"Verified browser executable at: {expected_exe}")
         
         # Verify source directories
         if not templates_dir.exists():
@@ -165,35 +244,48 @@ def build_standalone(dev_mode=False):
         if not static_dir.exists():
             raise FileNotFoundError(f"Static directory not found: {static_dir}")
             
-        # Define data files - use relative paths for PyInstaller destinations
+        # Define data files
         data_files = [
-            (str(templates_dir), 'frontend/templates'),  # Will be at root of _MEIPASS
-            (str(static_dir), 'frontend/static'),       # Will be at root of _MEIPASS
+            (str(templates_dir), 'frontend/templates'),
+            (str(static_dir), 'frontend/static'),
             (str(src_dir / 'config.json.example'), '.'),
             (str(src_dir / '.env.example'), '.')
         ]
         
         # Base PyInstaller arguments
         args = [
-            str(src_dir / 'app.py'),  # Entry point
+            str(src_dir / 'app.py'),
             '--name=spotscrape',
             '--onedir',
             '--clean',
             '--noconfirm',
             '--distpath', str(dist_dir),
             '--workpath', str(build_dir),
-            '--specpath', str(base_dir)
+            '--specpath', str(base_dir),
+            '--hidden-import=playwright._impl._api_types',  # Essential Playwright import
+            '--collect-all=playwright',  # Include all Playwright files
+            '--collect-submodules=playwright',  # Include all submodules
+            '--collect-data=playwright',  # Include all data files
+            '--collect-binaries=playwright'  # Include all binaries
         ]
         
-        # Add browser binary - will be at root of _MEIPASS
+        # Add the _internal directory (includes Playwright files)
         separator = ";" if sys.platform.startswith('win') else ":"
-        browser_arg = f"{str(browser_path)}{separator}playwright-browser"
-        logger.info(f"Adding browser binary: {browser_arg}")
-        args.extend(['--add-binary', browser_arg])
+        
+        # Add the main _internal directory
+        internal_dir_arg = f"{str(build_dir / '_internal')}{separator}_internal"
+        logger.info(f"Adding _internal directory to PyInstaller: {internal_dir_arg}")
+        args.extend(['--add-data', internal_dir_arg])
+        
+        # Explicitly add the .local-browsers directory
+        browsers_dir = build_dir / '_internal' / 'playwright' / 'driver' / 'package' / '.local-browsers'
+        browsers_dir_arg = f"{str(browsers_dir)}{separator}playwright/driver/package/.local-browsers"
+        logger.info(f"Adding .local-browsers directory to PyInstaller: {browsers_dir_arg}")
+        args.extend(['--add-data', browsers_dir_arg])
         
         # Add data files
         for src, dst in data_files:
-            data_arg = f'{str(src)}{";" if sys.platform.startswith("win") else ":"}{dst}'
+            data_arg = f'{str(src)}{separator}{dst}'
             args.extend(['--add-data', data_arg])
         
         # Add icon if available
