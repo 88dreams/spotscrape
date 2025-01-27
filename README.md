@@ -1,3 +1,9 @@
+⚠️ **REPOSITORY MOVED** ⚠️
+
+This repository has been renamed and moved to [lisztserv](https://github.com/88dreams/lisztserv). Please update your references and stars to the new repository. This repository will be archived and eventually deleted.
+
+---
+
 # SpotScrape
 
 A Python tool for scraping music information from web pages and creating Spotify playlists.
