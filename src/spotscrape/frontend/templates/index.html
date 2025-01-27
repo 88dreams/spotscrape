@@ -9,7 +9,59 @@
     <link href="{{ url_for('static', filename='css/styles.css') }}" rel="stylesheet">
 </head>
 <body class="bg-gray-100">
+    <!-- Credentials Modal -->
+    <div id="credentialsModal" class="modal">
+        <div class="modal-content">
+            <h2>API Credentials</h2>
+            <div id="credentialsForm">
+                <div id="spotifyCredentials">
+                    <h3>Spotify Credentials</h3>
+                    <div class="form-group">
+                        <label for="spotifyClientId">Client ID:</label>
+                        <div class="input-with-toggle">
+                            <input type="password" id="spotifyClientId" name="spotifyClientId">
+                            <button type="button" class="show-hide-btn" data-for="spotifyClientId" aria-label="Toggle visibility">
+                                <span class="eye-icon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="spotifyClientSecret">Client Secret:</label>
+                        <div class="input-with-toggle">
+                            <input type="password" id="spotifyClientSecret" name="spotifyClientSecret">
+                            <button type="button" class="show-hide-btn" data-for="spotifyClientSecret" aria-label="Toggle visibility">
+                                <span class="eye-icon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="openaiCredentials">
+                    <h3>OpenAI Credentials</h3>
+                    <div class="form-group">
+                        <label for="openaiKey">API Key:</label>
+                        <div class="input-with-toggle">
+                            <input type="password" id="openaiKey" name="openaiKey">
+                            <button type="button" class="show-hide-btn" data-for="openaiKey" aria-label="Toggle visibility">
+                                <span class="eye-icon">👁️</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" id="cancelCredentials" class="button secondary">Cancel</button>
+                    <button type="button" id="saveCredentials" class="button primary">Save Credentials</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <main class="container mx-auto p-4">
+        <header>
+            <h1>SpotScrape</h1>
+        </header>
+
         <!-- Top Sections Container -->
         <div class="top-sections-container">
             <!-- Left Column Container -->
@@ -66,6 +118,11 @@
                                     class="button-3d text-sm"
                                     style="min-width: 100px; height: 32px; display: flex; align-items: center; justify-content: center; background-color: var(--color-primary);"
                                     aria-label="Start GPT search">GPT SEARCH</button>
+                            <button type="button" 
+                                    id="configureCredentials" 
+                                    class="button-3d text-sm"
+                                    style="min-width: 100px; height: 32px; display: flex; align-items: center; justify-content: center; background-color: var(--color-primary);"
+                                    aria-label="Configure API keys">KEYS</button>
                         </div>
                     </form>
                 </section>

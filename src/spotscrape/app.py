@@ -26,6 +26,7 @@ import atexit
 import time
 from spotscrape.message_handler import gui_message, send_progress, message_queue, progress_queue
 from pathlib import Path
+from typing import Dict, Tuple
 
 """
 File Structure:
@@ -989,9 +990,130 @@ def start_server():
     # Run Flask with minimal output
     app.run(port=5000, threaded=True, debug=False, use_reloader=False)
 
+def load_env_file():
+    """Load environment variables from .env file"""
+    app_root = Path(__file__).parent.parent.parent
+    env_path = app_root / '.env'
+    
+    if not env_path.exists():
+        debug_logger.info("No .env file found")
+        return
+    
+    debug_logger.info(f"Loading environment variables from: {env_path}")
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os.environ[key] = value
+                    debug_logger.info(f"Loaded environment variable: {key}")
+    except Exception as e:
+        debug_logger.error(f"Error loading .env file: {e}")
+
+def check_credentials():
+    """Check if required credentials are present"""
+    credentials = {
+        'spotifyClientId': os.environ.get('SPOTIPY_CLIENT_ID', ''),
+        'spotifyClientSecret': os.environ.get('SPOTIPY_CLIENT_SECRET', ''),
+        'openaiKey': os.environ.get('OPENAI_API_KEY', '')
+    }
+    
+    messages = []
+    if not credentials['spotifyClientId'] or not credentials['spotifyClientSecret']:
+        messages.append("Spotify credentials missing")
+    if not credentials['openaiKey']:
+        messages.append("OpenAI API key missing")
+    
+    debug_logger.info(f"Credential check - Spotify ID: {'present' if credentials['spotifyClientId'] else 'missing'}, "
+                     f"Secret: {'present' if credentials['spotifyClientSecret'] else 'missing'}, "
+                     f"OpenAI: {'present' if credentials['openaiKey'] else 'missing'}")
+    
+    return credentials, messages
+
+def save_credentials(creds: Dict[str, str]) -> None:
+    """
+    Save credentials to .env file
+    """
+    # Get the absolute path to the application root directory
+    app_root = Path(__file__).parent.parent.parent
+    env_path = app_root / '.env'
+    
+    debug_logger.info(f"Saving credentials to: {env_path}")
+    
+    # Read existing contents if file exists
+    existing_env = {}
+    if env_path.exists():
+        debug_logger.info("Reading existing .env file")
+        with open(env_path, 'r') as f:
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    existing_env[key] = value
+    
+    # Update with new credentials
+    existing_env.update(creds)
+    
+    try:
+        # Write back to file
+        with open(env_path, 'w') as f:
+            for key, value in existing_env.items():
+                f.write(f"{key}={value}\n")
+        debug_logger.info("Credentials saved successfully")
+    except Exception as e:
+        debug_logger.error(f"Error saving credentials: {e}")
+        raise
+
+@app.route('/api/check-credentials')
+def api_check_credentials():
+    """API endpoint to check credential status"""
+    credentials, messages = check_credentials()
+    return jsonify({
+        'credentials': credentials,
+        'messages': messages
+    })
+
+@app.route('/api/save-credentials', methods=['POST'])
+def api_save_credentials():
+    try:
+        data = request.json
+        debug_logger.info("Received credential save request")
+        
+        creds = {}
+        if 'spotifyClientId' in data and 'spotifyClientSecret' in data:
+            creds['SPOTIPY_CLIENT_ID'] = data['spotifyClientId']
+            creds['SPOTIPY_CLIENT_SECRET'] = data['spotifyClientSecret']
+            creds['SPOTIPY_REDIRECT_URI'] = 'http://localhost:8888/callback'
+            debug_logger.info("Processing Spotify credentials")
+        
+        if 'openaiKey' in data:
+            creds['OPENAI_API_KEY'] = data['openaiKey']
+            debug_logger.info("Processing OpenAI credentials")
+        
+        if not creds:
+            debug_logger.warning("No credentials provided in request")
+            return jsonify({'success': False, 'error': 'No credentials provided'}), 400
+        
+        # Save credentials to file
+        save_credentials(creds)
+        
+        # Update current environment
+        for key, value in creds.items():
+            os.environ[key] = value
+            debug_logger.info(f"Updated environment variable: {key}")
+        
+        debug_logger.info("Credentials saved and environment updated successfully")
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        debug_logger.error(f"Error saving credentials: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 def main():
     """Entry point for the application"""
     try:
+        # Load environment variables from .env file
+        load_env_file()
+        
         # Suppress all console output
         class NullIO:
             def write(self, *args, **kwargs):

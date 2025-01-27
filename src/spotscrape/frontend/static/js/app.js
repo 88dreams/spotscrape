@@ -20,7 +20,9 @@ document.addEventListener('DOMContentLoaded', function() {
             SCAN_URL: '/api/scan-url',
             SCAN_GPT: '/api/scan-webpage',
             CREATE_PLAYLIST: '/api/create-playlist',
-            GPT_RESULTS: '/api/results-gpt'
+            GPT_RESULTS: '/api/results-gpt',
+            CHECK_CREDENTIALS: '/api/check-credentials',
+            SAVE_CREDENTIALS: '/api/save-credentials'
         },
         UI: {
             DEBOUNCE_DELAY: 150,
@@ -61,6 +63,258 @@ document.addEventListener('DOMContentLoaded', function() {
             TIMEOUT: 30000
         }
     };
+
+    // UI Elements
+    const elements = {
+        // Modal elements
+        modal: document.getElementById('credentialsModal'),
+        spotifyForm: document.getElementById('spotifyCredentials'),
+        openaiForm: document.getElementById('openaiCredentials'),
+        saveButton: document.getElementById('saveCredentials'),
+        cancelButton: document.getElementById('cancelCredentials'),
+        configureButton: document.getElementById('configureCredentials'),
+        
+        // Main UI elements
+        urlInput: document.getElementById('urlInput'),
+        urlSearchButton: document.getElementById('urlSearchButton'),
+        gptSearchButton: document.getElementById('gptSearchButton'),
+        albumsList: document.getElementById('albumsList'),
+        allTracksSwitch: document.getElementById('allTracksSwitch'),
+        popularTracksSwitch: document.getElementById('popularTracksSwitch'),
+        playlistName: document.getElementById('playlistName'),
+        playlistDescription: document.getElementById('playlistDescription'),
+        createPlaylistButton: document.getElementById('createPlaylistButton'),
+        messagesDiv: document.getElementById('messages'),
+        progressContainer: document.getElementById('progressContainer'),
+        progressBar: document.getElementById('progressBar'),
+        progressText: document.getElementById('progressText'),
+        progressPercent: document.getElementById('progressPercent'),
+        toggleSelectAll: document.getElementById('toggleSelectAll'),
+        
+        // Status elements
+        urlStatus: document.getElementById('urlScanStatus'),
+        gptStatus: document.getElementById('gptScanStatus')
+    };
+
+    // Validate critical elements
+    if (!elements.urlSearchButton || !elements.gptSearchButton || !elements.urlInput) {
+        console.error('Critical elements missing:', {
+            urlSearchButton: !!elements.urlSearchButton,
+            gptSearchButton: !!elements.gptSearchButton,
+            urlInput: !!elements.urlInput
+        });
+        return;
+    }
+
+    // Credential state
+    let credentialState = {
+        spotify: false,
+        openai: false,
+        spotifyClientId: '',
+        spotifyClientSecret: '',
+        openaiKey: ''
+    };
+
+    // Check credentials on startup
+    async function checkCredentials() {
+        try {
+            const response = await fetch('/api/check-credentials');
+            const data = await response.json();
+            
+            // Update credential state
+            credentialState = {
+                spotifyClientId: data.credentials.spotifyClientId || '',
+                spotifyClientSecret: data.credentials.spotifyClientSecret || '',
+                openaiKey: data.credentials.openaiKey || ''
+            };
+            
+            // Update UI based on credential state
+            const hasSpotifyCredentials = credentialState.spotifyClientId && credentialState.spotifyClientSecret;
+            const hasOpenAICredentials = credentialState.openaiKey;
+            
+            // Update button states
+            elements.urlSearchButton.style.opacity = hasSpotifyCredentials ? '1' : '0.5';
+            elements.urlSearchButton.style.pointerEvents = hasSpotifyCredentials ? 'auto' : 'none';
+            
+            elements.gptSearchButton.style.opacity = (hasSpotifyCredentials && hasOpenAICredentials) ? '1' : '0.5';
+            elements.gptSearchButton.style.pointerEvents = (hasSpotifyCredentials && hasOpenAICredentials) ? 'auto' : 'none';
+            
+            // Add status messages to the messages div
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            
+            if (data.messages && data.messages.length > 0) {
+                data.messages.forEach(message => {
+                    const messageElement = document.createElement('div');
+                    messageElement.textContent = message;
+                    messageElement.className = 'message';
+                    messagesDiv.appendChild(messageElement);
+                });
+            }
+            
+            return data.credentials;
+        } catch (error) {
+            console.error('Error checking credentials:', error);
+            return null;
+        }
+    }
+
+    // Update UI based on credential state
+    function updateUI() {
+        // Update button states and styles based on complete sets of credentials
+        const hasCompleteSpotifyCredentials = !!(credentialState.spotifyClientId && credentialState.spotifyClientSecret);
+        elements.urlSearchButton.disabled = !hasCompleteSpotifyCredentials;
+        elements.gptSearchButton.disabled = !hasCompleteSpotifyCredentials || !credentialState.openai;
+        
+        // Add visual disabled state
+        elements.urlSearchButton.style.opacity = hasCompleteSpotifyCredentials ? '1' : '0.5';
+        elements.gptSearchButton.style.opacity = (hasCompleteSpotifyCredentials && credentialState.openai) ? '1' : '0.5';
+        
+        // Update Configure Credentials button
+        elements.configureButton.textContent = 'API KEYS';
+        
+        // Add status messages to Messages section
+        if (elements.messagesDiv) {
+            elements.messagesDiv.innerHTML = ''; // Clear existing messages
+            
+            // Add URL Search status
+            const urlMessage = document.createElement('div');
+            urlMessage.className = `message ${hasCompleteSpotifyCredentials ? 'success' : 'error'}`;
+            urlMessage.textContent = `URL Search: ${hasCompleteSpotifyCredentials ? 'Available' : 'Unavailable (Missing Spotify credentials)'}`;
+            elements.messagesDiv.appendChild(urlMessage);
+            
+            // Add GPT Search status
+            const gptMessage = document.createElement('div');
+            gptMessage.className = `message ${(hasCompleteSpotifyCredentials && credentialState.openai) ? 'success' : 'error'}`;
+            gptMessage.textContent = `GPT Search: ${(hasCompleteSpotifyCredentials && credentialState.openai) ? 'Available' : 'Unavailable (Missing required credentials)'}`;
+            elements.messagesDiv.appendChild(gptMessage);
+        }
+    }
+
+    // Show credentials modal with appropriate messages
+    function showCredentialsModal() {
+        const modal = document.getElementById('credentialsModal');
+        modal.style.display = 'block';
+        
+        // Pre-fill existing credentials if available
+        if (credentialState.spotifyClientId) {
+            document.getElementById('spotifyClientId').value = credentialState.spotifyClientId;
+        }
+        if (credentialState.spotifyClientSecret) {
+            document.getElementById('spotifyClientSecret').value = credentialState.spotifyClientSecret;
+        }
+        if (credentialState.openaiKey) {
+            document.getElementById('openaiKey').value = credentialState.openaiKey;
+        }
+    }
+
+    // Reset modal state
+    function resetModal() {
+        elements.modal.style.display = 'none';
+        // Don't hide the forms as they need to remain in the DOM
+        elements.spotifyForm.style.display = 'block';
+        elements.openaiForm.style.display = 'block';
+    }
+
+    // Toggle password visibility
+    function togglePasswordVisibility(inputId) {
+        const input = document.getElementById(inputId);
+        if (!input) return;
+        
+        input.type = input.type === 'password' ? 'text' : 'password';
+    }
+
+    // Save credentials
+    async function saveCredentials() {
+        const credentials = {};
+        let hasChanges = false;
+        
+        // Get Spotify credentials
+        const clientId = document.getElementById('spotifyClientId').value;
+        const clientSecret = document.getElementById('spotifyClientSecret').value;
+        
+        // Check if Spotify credentials have changed
+        if (clientId === '') {
+            if (credentialState.spotify) {
+                credentials.spotifyClientId = '';
+                credentials.spotifyClientSecret = '';
+                hasChanges = true;
+            }
+        } else if (clientId !== credentialState.spotifyClientId || clientSecret !== credentialState.spotifyClientSecret) {
+            credentials.spotifyClientId = clientId;
+            credentials.spotifyClientSecret = clientSecret;
+            hasChanges = true;
+        }
+        
+        // Get OpenAI credentials
+        const openaiKey = document.getElementById('openaiKey').value;
+        if (openaiKey === '') {
+            if (credentialState.openai) {
+                credentials.openaiKey = '';
+                hasChanges = true;
+            }
+        } else if (openaiKey !== credentialState.openaiKey) {
+            credentials.openaiKey = openaiKey;
+            hasChanges = true;
+        }
+        
+        // Only make API call if there are changes
+        if (hasChanges) {
+            try {
+                const response = await fetch(CONFIG.ENDPOINTS.SAVE_CREDENTIALS, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(credentials)
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    // Update credential state with new values
+                    if (credentials.spotifyClientId !== undefined) {
+                        credentialState.spotifyClientId = credentials.spotifyClientId;
+                        credentialState.spotifyClientSecret = credentials.spotifyClientSecret;
+                        credentialState.spotify = credentials.spotifyClientId !== '';
+                    }
+                    if (credentials.openaiKey !== undefined) {
+                        credentialState.openaiKey = credentials.openaiKey;
+                        credentialState.openai = credentials.openaiKey !== '';
+                    }
+                    
+                    debugLogger.log('Credentials saved successfully', 'INFO');
+                    resetModal();
+                    updateUI();
+                } else {
+                    debugLogger.log(`Failed to save credentials: ${result.error}`, 'ERROR');
+                    alert('Failed to save credentials: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error saving credentials:', error);
+                debugLogger.log(`Error saving credentials: ${error.message}`, 'ERROR');
+                alert('Error saving credentials: ' + error.message);
+            }
+        } else {
+            // If no changes, just close the modal
+            resetModal();
+        }
+    }
+
+    // Event Listeners
+    elements.saveButton.addEventListener('click', saveCredentials);
+    elements.cancelButton.addEventListener('click', resetModal);
+    elements.configureButton.addEventListener('click', showCredentialsModal);
+
+    // Add event listeners for show/hide buttons
+    document.querySelectorAll('.show-hide-btn').forEach(button => {
+        button.addEventListener('click', (e) => {
+            const inputId = e.currentTarget.dataset.for;
+            togglePasswordVisibility(inputId);
+        });
+    });
+
+    // Initialize
+    checkCredentials();
 
     // Enhanced request queue and caching system
     const requestQueue = {
@@ -425,35 +679,6 @@ document.addEventListener('DOMContentLoaded', function() {
             cleanups.forEach(fn => fn());
             cleanupRegistry.delete(target);
         }
-    }
-
-    // Elements cache with validation
-    const elements = {
-        urlInput: document.getElementById('urlInput'),
-        urlSearchButton: document.getElementById('urlSearchButton'),
-        gptSearchButton: document.getElementById('gptSearchButton'),
-        albumsList: document.getElementById('albumsList'),
-        allTracksSwitch: document.getElementById('allTracksSwitch'),
-        popularTracksSwitch: document.getElementById('popularTracksSwitch'),
-        playlistName: document.getElementById('playlistName'),
-        playlistDescription: document.getElementById('playlistDescription'),
-        createPlaylistButton: document.getElementById('createPlaylistButton'),
-        messagesDiv: document.getElementById('messages'),
-        progressContainer: document.getElementById('progressContainer'),
-        progressBar: document.getElementById('progressBar'),
-        progressText: document.getElementById('progressText'),
-        progressPercent: document.getElementById('progressPercent'),
-        toggleSelectAll: document.getElementById('toggleSelectAll')
-    };
-
-    // Validate critical elements
-    if (!elements.urlSearchButton || !elements.gptSearchButton || !elements.urlInput) {
-        console.error('Critical elements missing:', {
-            urlSearchButton: !!elements.urlSearchButton,
-            gptSearchButton: !!elements.gptSearchButton,
-            urlInput: !!elements.urlInput
-        });
-        return;
     }
 
     // State management with immutable updates
@@ -1797,6 +2022,15 @@ document.addEventListener('DOMContentLoaded', function() {
     };
 
     // Initialize application
-    initializeEventListeners();
-    debugLogger.log('Application initialized', 'INFO');
+    async function initializeApp() {
+        initializeEventListeners();
+        await checkCredentials(); // Check credentials first
+        debugLogger.log('Application initialized', 'INFO');
+    }
+
+    // Start the application
+    initializeApp().catch(error => {
+        console.error('Error initializing application:', error);
+        debugLogger.log(`Error initializing application: ${error.message}`, 'ERROR');
+    });
 }); 
