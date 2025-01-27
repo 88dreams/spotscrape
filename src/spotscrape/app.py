@@ -41,39 +41,19 @@ File Structure:
 
 def get_log_dir():
     """Get the log directory path based on whether running as executable or script"""
-    try:
-        if getattr(sys, 'frozen', False):
-            # Running as executable - use logs directory next to the executable
-            base_dir = Path(sys.executable).parent
-            print(f"Running as executable, base directory: {base_dir}")  # Temporary print for debugging
-        else:
-            # Running as script - use current directory
-            base_dir = Path(__file__).parent.resolve()  # Make sure we get absolute path
-            print(f"Running as script, base directory: {base_dir}")  # Temporary print for debugging
+    if getattr(sys, 'frozen', False):
+        # Running as compiled executable
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # Running as script
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Create logs directory at the base level
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    print(f"Log directory created/verified at: {log_dir}")
+    return log_dir
 
-        # Create logs directory in the base directory
-        log_dir = base_dir / 'logs'
-        
-        # Ensure directory exists with explicit creation
-        os.makedirs(str(log_dir), exist_ok=True)
-        
-        # Verify directory was created and is writable
-        if not log_dir.exists():
-            raise OSError(f"Failed to create log directory: {log_dir}")
-        if not os.access(str(log_dir), os.W_OK):
-            raise OSError(f"Log directory is not writable: {log_dir}")
-            
-        print(f"Log directory created/verified at: {log_dir}")  # Temporary print for debugging
-        return str(log_dir)
-    except Exception as e:
-        print(f"Error setting up log directory: {str(e)}")  # Temporary print for debugging
-        # Fallback to a local logs directory
-        fallback_dir = Path.cwd() / 'logs'
-        os.makedirs(str(fallback_dir), exist_ok=True)
-        print(f"Using fallback log directory: {fallback_dir}")  # Temporary print for debugging
-        return str(fallback_dir)
-
-# Configure debug logging
 def setup_debug_logging():
     """Set up debug logging with enhanced configuration"""
     try:
@@ -83,11 +63,11 @@ def setup_debug_logging():
         
         # Get log directory
         log_dir = get_log_dir()
-        print(f"Setting up debug logging in: {log_dir}")  # Temporary print for debugging
+        print(f"Setting up debug logging in: {log_dir}")  # Debug print
         
         # Create or overwrite the debug log file
         log_path = os.path.join(log_dir, f"spot-debug-{datetime.now().strftime('%Y%m%d')}.log")
-        print(f"Debug log file will be: {log_path}")  # Temporary print for debugging
+        print(f"Debug log file will be: {log_path}")  # Debug print
         
         # Remove any existing handlers
         for handler in debug_logger.handlers[:]:
@@ -113,15 +93,15 @@ def setup_debug_logging():
             debug_logger.info(f"Debug Log file created at: {log_path}")
             debug_logger.info("Debug logging initialized and enabled")
             
-            print(f"Debug logging successfully initialized to: {log_path}")  # Temporary print for debugging
+            print(f"Debug logging successfully initialized to: {log_path}")  # Debug print
             return debug_logger
             
         except Exception as e:
-            print(f"Error creating log file handler: {str(e)}")  # Temporary print for debugging
+            print(f"Error creating log file handler: {str(e)}")  # Debug print
             raise
             
     except Exception as e:
-        print(f"Error in setup_debug_logging: {str(e)}")  # Temporary print for debugging
+        print(f"Error in setup_debug_logging: {str(e)}")  # Debug print
         # Create a basic console logger as fallback
         console_logger = logging.getLogger('spot-debug-console')
         console_logger.setLevel(logging.DEBUG)
@@ -242,10 +222,64 @@ def debug():
         })
 
 # Setup logging
-logger, spotify_logger = setup_logging()
+def setup_logging():
+    """Set up main and Spotify logging"""
+    # Get log directory using the centralized function
+    log_dir = get_log_dir()
+    
+    # Set up main logger
+    logger = logging.getLogger('spot-main')
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    
+    # Set up Spotify logger
+    spotify_logger = logging.getLogger('spot-spotify')
+    spotify_logger.setLevel(logging.DEBUG)
+    spotify_logger.propagate = False
+    
+    # Create handlers with date in filename
+    main_handler = logging.FileHandler(
+        os.path.join(log_dir, f"spot-main-{datetime.now().strftime('%Y%m%d')}.log"),
+        encoding='utf-8'
+    )
+    spotify_handler = logging.FileHandler(
+        os.path.join(log_dir, f"spot-spotify-{datetime.now().strftime('%Y%m%d')}.log"),
+        encoding='utf-8'
+    )
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Set formatters
+    main_handler.setFormatter(formatter)
+    spotify_handler.setFormatter(formatter)
+    
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    for handler in spotify_logger.handlers[:]:
+        spotify_logger.removeHandler(handler)
+    
+    # Add handlers
+    logger.addHandler(main_handler)
+    spotify_logger.addHandler(spotify_handler)
+    
+    # Log initialization
+    logger.info(f"Main logging initialized. Log directory: {log_dir}")
+    spotify_logger.info(f"Spotify logging initialized. Log directory: {log_dir}")
+    
+    return logger, spotify_logger
 
 # Make logger global in spotscrape module
 import spotscrape
+spotscrape.logger = None
+spotscrape.spotify_logger = None
+
+# Initialize loggers
+logger, spotify_logger = setup_logging()
 spotscrape.logger = logger
 spotscrape.spotify_logger = spotify_logger
 
@@ -465,7 +499,6 @@ def setup_gpt_logging():
     
     # Get log directory
     log_dir = get_log_dir()
-    os.makedirs(log_dir, exist_ok=True)
     
     # Create or overwrite the GPT log file
     log_path = os.path.join(log_dir, f"spot-gpt-{datetime.now().strftime('%Y%m%d')}.log")
@@ -768,8 +801,6 @@ def get_progress():
             except Exception as e:
                 logger.error(f"Error in progress stream: {e}")
                 break
-
-    return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/api/scan-webpage', methods=['POST'])
 async def scan_webpage_route():

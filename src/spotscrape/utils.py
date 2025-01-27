@@ -19,13 +19,16 @@ def get_app_root():
 def get_log_dir():
     """Get the log directory path based on whether running as executable or script"""
     if getattr(sys, 'frozen', False):
-        # Running as executable - use _internal/logs
+        # Running as compiled executable
         base_dir = os.path.dirname(sys.executable)
-        return os.path.join(base_dir, '_internal', 'logs')
     else:
-        # Running as script - use src/spotscrape/logs
+        # Running as script
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_dir, 'logs')
+    
+    # Create logs directory
+    log_dir = os.path.join(base_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
 
 def setup_logging() -> Tuple[logging.Logger, logging.Logger]:
     """Set up logging for the application."""
@@ -67,7 +70,7 @@ def setup_logging() -> Tuple[logging.Logger, logging.Logger]:
         logger.removeHandler(handler)
     for handler in spotify_logger.handlers[:]:
         spotify_logger.removeHandler(handler)
-        
+    
     # Add handlers
     logger.addHandler(main_handler)
     spotify_logger.addHandler(spotify_handler)

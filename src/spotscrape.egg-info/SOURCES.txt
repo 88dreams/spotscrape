@@ -1,4 +1,3 @@
-.cache
 .env.example
 LICENSE
 MANIFEST.in
@@ -24,6 +23,7 @@ src/spotscrape.egg-info/dependency_links.txt
 src/spotscrape.egg-info/entry_points.txt
 src/spotscrape.egg-info/requires.txt
 src/spotscrape.egg-info/top_level.txt
+src/spotscrape/frontend/static/css/style.css
 src/spotscrape/frontend/static/css/styles.css
 src/spotscrape/frontend/static/css/tailwind.min.css
 src/spotscrape/frontend/static/img/icon.ico

@@ -585,17 +585,24 @@ def get_next_log_number() -> int:
     used_numbers = {i for _, i in log_files}
     return next(i for i in range(10) if i not in used_numbers)
 
-def setup_logging():
-    """Set up logging with enhanced configuration"""
-    # Get the executable's directory or current directory
+def get_log_dir():
+    """Get the log directory path based on whether running as executable or script"""
     if getattr(sys, 'frozen', False):
+        # Running as compiled executable
         base_dir = os.path.dirname(sys.executable)
     else:
+        # Running as script
         base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Create logs directory if it doesn't exist
+    # Create logs directory
     log_dir = os.path.join(base_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
+    return log_dir
+
+def setup_logging():
+    """Set up logging with enhanced configuration"""
+    # Get log directory using the centralized function
+    log_dir = get_log_dir()
     
     # Create formatters
     detailed_formatter = logging.Formatter(
